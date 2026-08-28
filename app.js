@@ -25,8 +25,7 @@ function render(){
      html+=`<div class="card"><h2>🎵 Hvor hører sangen hjemme?</h2><p>Placér den mellem årstallene på din tidslinje.</p><div class="timeline">${me.timeline.map(y=>`<div class="year">${y}</div>`).join("")||"<span class='small'>Ingen sange endnu</span>"}</div><div class="slots">${Array.from({length:me.timeline.length+1},(_,i)=>`<button class="slot" onclick="place(${i})">Placer her</button>`).join("")}</div><p class="small">${me.ready?"Du er klar! Venter på de andre…":"Vælg en placering"}</p></div>`;
      if(host)html+=`<div class="card"><button onclick="reveal()">Afslør svaret ✨</button></div>`;
    } else {
-     html+=`<div class="card"><h2>🎉 Svaret</h2><h3>${esc(song.title)} – ${esc(song.artist)}</h3><div class="code">${song.year}</div><p>Point gives automatisk, hvis sangen er placeret korrekt.</p>${host?'<button onclick="next()">Næste runde ➜</button>':""}</div>`;
-   }
+     html+=`<div class="card"><h2>🎉 Svaret</h2><h3>${esc(song.title)} – ${esc(song.artist)}</h3><div class="code">${song.year}</div><p>Point gives automatisk, hvis sangen er placeret korrekt.</p><a href="https://open.spotify.com/search/${encodeURIComponent(song.title+" "+song.artist)}" target="_blank"><button>🎵 Åbn på Spotify</button></a>${host?'<button onclick="next()">Næste runde ➜</button>':""}</div>`;   }
  }
  document.getElementById("app").innerHTML=html;
 }
