@@ -88,7 +88,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("startGame", ({ code }) => {
-    const game = games[code];
+    console.log("STARTGAME MODTAGET:", code, "fra:", socket.id);    const game = games[code];
 
     if (!game || game.hostId !== socket.id) return;
 
