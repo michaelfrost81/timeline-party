@@ -182,8 +182,13 @@ io.on("connection", (socket) => {
       io.to(code).emit("game:update", publicGame(game));
     }
   });
+socket.on("startGame", ({ code }) => {
+  const game = games.get(code);
+  if (!game) return;
 
-});
+  game.phase = "song";
+  io.to(code).emit("gameUpdate", game);
+});});
 
 const PORT = process.env.PORT || 3000;
 
