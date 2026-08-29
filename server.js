@@ -1,96 +1,101 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static(__dirname));
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});const games = {};
+app.use(express.static("public"));
 
-function publicGame(game) {
-  return {
-    code: game.code,
-    hostId: game.hostId,
-    phase: game.phase,
-    song: game.song,
-    revealed: game.revealed,
-    players: game.players.map(player => ({
-      id: player.id,
-      name: player.name,
-      score: player.score
-    }))
-  };
-}
+const games = {};
 
 function updateGame(code) {
   const game = games[code];
 
-  if (game) {
-    io.to(code).emit("game:update", publicGame(game));
-  }
+  if (!game) return;
+
+  io.to(code).emit("gameUpdate", game);
 }
 
 io.on("connection", (socket) => {
+  console.log("En spiller forbundet:", socket.id);
 
   socket.on("createGame", ({ name, code }) => {
-    code = (code || "").toUpperCase().trim();
+    if (!code) return;
 
-    if (!name || !code) return;
-
-    games[code] = {
+    const game = {
       code,
       hostId: socket.id,
-      phase: "lobby",
+      players: [],
+      phase: "song",
       song: null,
-      revealed: false,
-      players: [
-        {
-          id: socket.id,
-          name,
-          score: 0
-        }
-      ]
+      revealed: false
     };
 
+    games[code] = game;
+
     socket.join(code);
+
+    game.players.push({
+      id: socket.id,
+      name: name || "Vært",
+      score: 0
+    });
+
+    console.log("Spil oprettet:", code);
+
     updateGame(code);
   });
 
   socket.on("joinGame", ({ name, code }) => {
-    code = (code || "").toUpperCase().trim();
-
     const game = games[code];
 
     if (!game) {
-      socket.emit("errorMessage", "Spillet findes ikke");
+      socket.emit("gameError", "Spillet blev ikke fundet");
       return;
     }
 
-    const alreadyJoined = game.players.find(
-      player => player.id === socket.id
+    socket.join(code);
+
+    const existingPlayer = game.players.find(
+      (player) => player.id === socket.id
     );
 
-    if (!alreadyJoined) {
+    if (!existingPlayer) {
       game.players.push({
         id: socket.id,
-        name,
+        name: name || "Spiller",
         score: 0
       });
     }
 
-    socket.join(code);
     updateGame(code);
   });
 
   socket.on("startGame", ({ code }) => {
-    console.log("STARTGAME MODTAGET:", code, "fra:", socket.id);    const game = games[code];
+    console.log(
+      "STARTGAME MODTAGET:",
+      code,
+      "fra:",
+      socket.id
+    );
 
-    if (!game || game.hostId !== socket.id) return;
+    const game = games[code];
+
+    if (!game) {
+      console.log("Spillet findes ikke:", code);
+      return;
+    }
+
+    if (game.hostId !== socket.id) {
+      console.log(
+        "Kun værten må starte runden"
+      );
+      return;
+    }
+
+    console.log("Starter runden!");
 
     game.phase = "song";
     game.song = null;
@@ -102,80 +107,83 @@ io.on("connection", (socket) => {
   socket.on("setSong", ({ code, title, artist, year }) => {
     const game = games[code];
 
-    if (!game || game.hostId !== socket.id) return;
+    if (!game) return;
+
+    if (game.hostId !== socket.id) return;
 
     game.song = {
       title,
       artist,
-      year
+      year: Number(year)
     };
 
     game.revealed = false;
+
+    updateGame(code);
+  });
+
+  socket.on("placeSong", ({ code, position }) => {
+    const game = games[code];
+
+    if (!game) return;
+
+    const player = game.players.find(
+      (p) => p.id === socket.id
+    );
+
+    if (!player) return;
+
+    player.position = position;
+
     updateGame(code);
   });
 
   socket.on("revealSong", ({ code }) => {
     const game = games[code];
 
-    if (!game || game.hostId !== socket.id) return;
+    if (!game) return;
+
+    if (game.hostId !== socket.id) return;
 
     game.revealed = true;
+
     updateGame(code);
   });
 
   socket.on("nextRound", ({ code }) => {
     const game = games[code];
 
-    if (!game || game.hostId !== socket.id) return;
+    if (!game) return;
 
+    if (game.hostId !== socket.id) return;
+
+    game.phase = "song";
     game.song = null;
     game.revealed = false;
-    game.phase = "song";
+
+    game.players.forEach((player) => {
+      delete player.position;
+    });
 
     updateGame(code);
   });
 
-  socket.on("addPoint", ({ code, playerId }) => {
-    const game = games[code];
-
-    if (!game || game.hostId !== socket.id) return;
-
-    const player = game.players.find(
-      player => player.id === playerId
-    );
-
-    if (player) {
-      player.score += 1;
-      updateGame(code);
-    }
-  });
-
   socket.on("disconnect", () => {
-    for (const code in games) {
-      const game = games[code];
+    console.log("Spiller forlod spillet:", socket.id);
 
-      if (!game) continue;
-
-      game.players = game.players.filter(
-        player => player.id !== socket.id
+    Object.values(games).forEach((game) => {
+      const player = game.players.find(
+        (p) => p.id === socket.id
       );
 
-      if (game.players.length === 0) {
-        delete games[code];
-        continue;
+      if (player) {
+        player.id = null;
       }
-
-      if (game.hostId === socket.id) {
-        game.hostId = game.players[0].id;
-      }
-
-      updateGame(code);
-    }
+    });
   });
-
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, () => {
   console.log(`Timeline Party kører på port ${PORT}`);
