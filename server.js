@@ -7,57 +7,46 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const games = new Map();
+app.use(express.static(path.join(__dirname, "public")));
 
-app.use(express.static(__dirname));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
-
-function makeCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  return code;
-}
+const games = {};
 
 function publicGame(game) {
   return {
     code: game.code,
-    players: game.players.map((player) => ({
+    hostId: game.hostId,
+    phase: game.phase,
+    song: game.song,
+    revealed: game.revealed,
+    players: game.players.map(player => ({
       id: player.id,
       name: player.name,
       score: player.score
-    })),
-    hostId: game.hostId,
-    targetScore: game.targetScore
+    }))
   };
 }
 
-function renderGame(socket, game) {
-  socket.emit("game:update", publicGame(game));
+function updateGame(code) {
+  const game = games[code];
+
+  if (game) {
+    io.to(code).emit("game:update", publicGame(game));
+  }
 }
 
 io.on("connection", (socket) => {
 
-  socket.on("createGame", (data) => {
-    const name = (data?.name || "Spiller").trim().slice(0, 20);
+  socket.on("createGame", ({ name, code }) => {
+    code = (code || "").toUpperCase().trim();
 
-    let code = makeCode();
+    if (!name || !code) return;
 
-    while (games.has(code)) {
-      code = makeCode();
-    }
-
-    const game = {
+    games[code] = {
       code,
       hostId: socket.id,
-      targetScore: 10,
+      phase: "lobby",
+      song: null,
+      revealed: false,
       players: [
         {
           id: socket.id,
@@ -67,111 +56,111 @@ io.on("connection", (socket) => {
       ]
     };
 
-    games.set(code, game);
-
     socket.join(code);
-
-    socket.emit("game:created", publicGame(game));
-    io.to(code).emit("game:update", publicGame(game));
+    updateGame(code);
   });
 
+  socket.on("joinGame", ({ name, code }) => {
+    code = (code || "").toUpperCase().trim();
 
-  socket.on("joinGame", (data) => {
-    const code = (data?.code || "").trim().toUpperCase();
-    const name = (data?.name || "Spiller").trim().slice(0, 20);
-
-    const game = games.get(code);
+    const game = games[code];
 
     if (!game) {
-      socket.emit("errorMessage", "Spillet blev ikke fundet.");
+      socket.emit("errorMessage", "Spillet findes ikke");
       return;
     }
 
-    if (game.players.some((player) => player.id === socket.id)) {
-      renderGame(socket, game);
-      return;
-    }
-
-    game.players.push({
-      id: socket.id,
-      name,
-      score: 0
-    });
-
-    socket.join(code);
-
-    io.to(code).emit("game:update", publicGame(game));
-  });
-
-
-  socket.on("addScore", (data) => {
-    const code = (data?.code || "").trim().toUpperCase();
-    const playerId = data?.playerId;
-    const points = Number(data?.points) || 0;
-
-    const game = games.get(code);
-
-    if (!game) return;
-
-    if (socket.id !== game.hostId) return;
-
-    const player = game.players.find(
-      (player) => player.id === playerId
+    const alreadyJoined = game.players.find(
+      player => player.id === socket.id
     );
 
-    if (!player) return;
+    if (!alreadyJoined) {
+      game.players.push({
+        id: socket.id,
+        name,
+        score: 0
+      });
+    }
 
-    player.score += points;
-
-    io.to(code).emit("game:update", publicGame(game));
+    socket.join(code);
+    updateGame(code);
   });
 
+  socket.on("startGame", ({ code }) => {
+    const game = games[code];
 
-  socket.on("setTargetScore", (data) => {
-    const code = (data?.code || "").trim().toUpperCase();
-    const targetScore = Number(data?.targetScore);
+    if (!game || game.hostId !== socket.id) return;
 
-    const game = games.get(code);
+    game.phase = "song";
+    game.song = null;
+    game.revealed = false;
 
-    if (!game) return;
-
-    if (socket.id !== game.hostId) return;
-
-    if (!Number.isFinite(targetScore) || targetScore < 1) return;
-
-    game.targetScore = Math.floor(targetScore);
-
-    io.to(code).emit("game:update", publicGame(game));
+    updateGame(code);
   });
 
+  socket.on("setSong", ({ code, title, artist, year }) => {
+    const game = games[code];
 
-  socket.on("nextRound", (data) => {
-    const code = (data?.code || "").trim().toUpperCase();
+    if (!game || game.hostId !== socket.id) return;
 
-    const game = games.get(code);
+    game.song = {
+      title,
+      artist,
+      year
+    };
 
-    if (!game) return;
-
-    if (socket.id !== game.hostId) return;
-
-    io.to(code).emit("nextRound");
+    game.revealed = false;
+    updateGame(code);
   });
 
+  socket.on("revealSong", ({ code }) => {
+    const game = games[code];
+
+    if (!game || game.hostId !== socket.id) return;
+
+    game.revealed = true;
+    updateGame(code);
+  });
+
+  socket.on("nextRound", ({ code }) => {
+    const game = games[code];
+
+    if (!game || game.hostId !== socket.id) return;
+
+    game.song = null;
+    game.revealed = false;
+    game.phase = "song";
+
+    updateGame(code);
+  });
+
+  socket.on("addPoint", ({ code, playerId }) => {
+    const game = games[code];
+
+    if (!game || game.hostId !== socket.id) return;
+
+    const player = game.players.find(
+      player => player.id === playerId
+    );
+
+    if (player) {
+      player.score += 1;
+      updateGame(code);
+    }
+  });
 
   socket.on("disconnect", () => {
-    for (const [code, game] of games.entries()) {
-      const player = game.players.find(
-        (player) => player.id === socket.id
-      );
+    for (const code in games) {
+      const game = games[code];
 
-      if (!player) continue;
+      if (!game) continue;
 
       game.players = game.players.filter(
-        (player) => player.id !== socket.id
+        player => player.id !== socket.id
       );
 
       if (game.players.length === 0) {
-        games.delete(code);
+        delete games[code];
         continue;
       }
 
@@ -179,16 +168,11 @@ io.on("connection", (socket) => {
         game.hostId = game.players[0].id;
       }
 
-      io.to(code).emit("game:update", publicGame(game));
+      updateGame(code);
     }
   });
-socket.on("startGame", ({ code }) => {
-  const game = games.get(code);
-  if (!game) return;
 
-  game.phase = "song";
-  io.to(code).emit("gameUpdate", game);
-});});
+});
 
 const PORT = process.env.PORT || 3000;
 
