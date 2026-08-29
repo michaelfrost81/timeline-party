@@ -6,8 +6,20 @@ socket.on("game:update",g=>{game=g;myCode=g.code;render();});
 function home(){document.getElementById("app").innerHTML=`
 <h1>Timeline Party</h1><p class="tag">Kan du placere musikken rigtigt i tiden?</p>
 <div class="card"><input id="name" placeholder="Dit navn" value="${myName}"><button onclick="create()">🎉 Opret spil</button><button class="secondary" onclick="joinForm()">🎵 Deltag i spil</button></div>`}
-function create(){const n=document.getElementById("name").value.trim(); if(!n)return; myName=n;localStorage.tpName=n;socket.emit("createGame",{name:n,targetScore:10},()=>{});}
-function joinForm(){document.getElementById("app").innerHTML=`<h1>Timeline Party</h1><div class="card"><input id="name" placeholder="Dit navn" value="${myName}"><input id="code" placeholder="Spilkode"><button onclick="join()">Deltag</button><button class="secondary" onclick="home()">Tilbage</button></div>`}
+function create() {
+  const name = document.getElementById("name").value.trim();
+  if (!name) return;
+
+  myName = name;
+  localStorage.tpName = name;
+
+  const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+
+  socket.emit("createGame", {
+    name: name,
+    code: code
+  });
+}function joinForm(){document.getElementById("app").innerHTML=`<h1>Timeline Party</h1><div class="card"><input id="name" placeholder="Dit navn" value="${myName}"><input id="code" placeholder="Spilkode"><button onclick="join()">Deltag</button><button class="secondary" onclick="home()">Tilbage</button></div>`}
 function join(){const n=document.getElementById("name").value.trim(),c=document.getElementById("code").value.trim().toUpperCase();if(!n||!c)return;myName=n;localStorage.tpName=n;socket.emit("joinGame",{name:n,code:c},r=>{if(!r.ok)alert(r.error)});}
 function esc(s){return String(s||"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
 function render(){
