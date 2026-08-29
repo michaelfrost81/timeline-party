@@ -1,12 +1,19 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static("public"));
+// Viser filer fra samme mappe som server.js
+app.use(express.static(__dirname));
+
+// Forside
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
 
 const games = {};
 
@@ -89,9 +96,7 @@ io.on("connection", (socket) => {
     }
 
     if (game.hostId !== socket.id) {
-      console.log(
-        "Kun værten må starte runden"
-      );
+      console.log("Kun værten må starte runden");
       return;
     }
 
