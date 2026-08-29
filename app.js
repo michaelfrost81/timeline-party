@@ -29,7 +29,7 @@ function render(){
  let html=`<h1>Timeline Party</h1><div class="card"><div class="small">SPILKODE</div><div class="code">${game.code}</div><p class="small">Del koden med vennerne</p></div>`;
  if(winner){html+=`<div class="card winner">🏆 ${esc(winner.name)} vinder!<br><span class="small">${winner.score} point</span></div>`}
  html+=`<div class="card"><b>Spillere</b>${game.players.map(p=>`<div class="player"><span>${esc(p.name)} ${p.id===game.hostId?'<span class="host">VÆRT</span>':""}</span><b>${p.score} ⭐</b></div>`).join("")}</div>`;
- if(game.phase==="lobby"){html+=`<div class="card">${host?`<button onclick="start()">Start spillet 🎶</button>`:`<p>Venter på at værten starter…</p>`}</div>`;}
+ if(game.phase==="lobby"){html+=`<div class="card">${host?`<button onclick="startGame()">Start spillet 🎶</button>`:`<p>Venter på at værten starter…</p>`}</div>`;}
  else if(!game.song){html+=host?`<div class="card"><h2>Ny sang</h2><input id="title" placeholder="Titel"><input id="artist" placeholder="Kunstner"><input id="year" type="number" placeholder="Årstal"><button onclick="setSong()">Start runden 🎵</button></div>`:`<div class="card">Venter på næste sang… 🎶</div>`}
  else {
    const song=game.song;
@@ -40,7 +40,7 @@ function render(){
  }
  document.getElementById("app").innerHTML=html;
 }
-function start(){socket.emit("startGame",{code:myCode})}
+function startGame(){socket.emit("startGame",{code:myCode})}
 function setSong(){socket.emit("setSong",{code:myCode,title:title.value,artist:artist.value,year:year.value})}
 function place(position){socket.emit("placeSong",{code:myCode,position})}
 function reveal(){socket.emit("revealSong",{code:myCode})}
