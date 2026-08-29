@@ -41,8 +41,14 @@ function render(){
  document.getElementById("app").innerHTML=html;
 }
 function startGame(){socket.emit("startGame",{code:myCode})}
-function setSong(){socket.emit("setSong",{code:myCode,title:title.value,artist:artist.value,year:year.value})}
-function place(position){socket.emit("placeSong",{code:myCode,position})}
+function setSong(){
+  socket.emit("setSong",{
+    code: myCode,
+    title: document.getElementById("title").value,
+    artist: document.getElementById("artist").value,
+    year: document.getElementById("year").value
+  })
+}function place(position){socket.emit("placeSong",{code:myCode,position})}
 function reveal(){socket.emit("revealSong",{code:myCode})}
 function next(){socket.emit("nextRound",{code:myCode})}
 home();
