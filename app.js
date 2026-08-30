@@ -1,3 +1,4 @@
+
 const socket = io();
 const appRoot = document.querySelector("#app");
 
@@ -281,3 +282,4 @@ function renderAnswer(isHost) {
 }
 
 render();
+

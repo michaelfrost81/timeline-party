@@ -58,7 +58,7 @@ io.on("connection", (socket) => {
     }
 
     const game = {
-      code,
+      code: gameCode,
       hostId: socket.id,
       currentSong: null,
       showAnswer: false,
