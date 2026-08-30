@@ -1,195 +1,230 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
 const path = require("path");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Viser filer fra samme mappe som server.js
+const PORT = process.env.PORT || 10000;
+const games = new Map();
+
 app.use(express.static(__dirname));
 
-// Forside
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-const games = {};
+function createCode() {
+  return Math.random().toString(36).slice(2, 7).toUpperCase();
+}
 
-function updateGame(code) {
-  const game = games[code];
+function publicGame(game) {
+  return {
+    code: game.code,
+    hostId: game.hostId,
+    currentSong: game.currentSong,
+    showAnswer: game.showAnswer,
+    players: game.players
+  };
+}
 
-  if (!game) return;
+function sendGame(game) {
+  io.to(game.code).emit("game:update", publicGame(game));
+}
 
-  io.to(code).emit("gameUpdate", game);
+function findPlayer(game, socketId) {
+  return game.players.find((player) => player.id === socketId);
+}
+
+function placementIsCorrect(timeline, year, slot) {
+  const leftYear = slot === 0 ? -Infinity : timeline[slot - 1];
+  const rightYear = slot === timeline.length ? Infinity : timeline[slot];
+
+  return leftYear <= year && year <= rightYear;
+}
+
+function reply(done, result) {
+  if (typeof done === "function") done(result);
 }
 
 io.on("connection", (socket) => {
-  console.log("En spiller forbundet:", socket.id);
+  socket.on("game:create", (playerName, done) => {
+    let code = createCode();
 
-  socket.on("createGame", ({ name, code }) => {
-    if (!code) return;
+    while (games.has(code)) {
+      code = createCode();
+    }
 
     const game = {
       code,
       hostId: socket.id,
-      players: [],
-      phase: "song",
-      song: null,
-      revealed: false
+      currentSong: null,
+      showAnswer: false,
+      players: [
+        {
+          id: socket.id,
+          name: playerName || "Vært",
+          score: 0,
+          timeline: [],
+          selectedSlot: null,
+          ready: false,
+          lastGuessWasCorrect: null
+        }
+      ]
     };
 
-    games[code] = game;
-
+    games.set(code, game);
     socket.join(code);
+    if (typeof done === "function") done({ ok: true, code, game: publicGame(game) });
+    sendGame(game);
+  });
+
+  socket.on("game:join", ({ code, playerName }, done) => {
+    const game = games.get(String(code || "").toUpperCase());
+
+    if (!game) {
+      if (typeof done === "function") done({ ok: false, message: "Spillet findes ikke. Tjek koden og prøv igen." });
+      return;
+    }
 
     game.players.push({
       id: socket.id,
-      name: name || "Vært",
-      score: 0
+      name: playerName || "Spiller",
+      score: 0,
+      timeline: [],
+      selectedSlot: null,
+      ready: false,
+      lastGuessWasCorrect: null
     });
 
-    console.log("Spil oprettet:", code);
-
-    updateGame(code);
+    socket.join(game.code);
+    if (typeof done === "function") done({ ok: true, code: game.code, game: publicGame(game) });
+    sendGame(game);
   });
 
-  socket.on("joinGame", ({ name, code }) => {
-    const game = games[code];
+  socket.on("song:start", ({ code, title, artist, year, url }, done) => {
+    const game = games.get(code);
 
-    if (!game) {
-      socket.emit("gameError", "Spillet blev ikke fundet");
+    if (!game || game.hostId !== socket.id) {
+      reply(done, { ok: false, message: "Kun værten kan starte en runde." });
       return;
     }
 
-    socket.join(code);
-
-    const existingPlayer = game.players.find(
-      (player) => player.id === socket.id
-    );
-
-    if (!existingPlayer) {
-      game.players.push({
-        id: socket.id,
-        name: name || "Spiller",
-        score: 0
-      });
-    }
-
-    updateGame(code);
-  });
-
-  socket.on("startGame", ({ code }) => {
-    console.log(
-      "STARTGAME MODTAGET:",
-      code,
-      "fra:",
-      socket.id
-    );
-
-    const game = games[code];
-
-    if (!game) {
-      console.log("Spillet findes ikke:", code);
+    const songYear = Number(year);
+    if (!title || !artist || !Number.isInteger(songYear)) {
+      if (typeof done === "function") done({ ok: false, message: "Udfyld titel, kunstner og årstal." });
       return;
     }
 
-    if (game.hostId !== socket.id) {
-      console.log("Kun værten må starte runden");
-      return;
-    }
-
-    console.log("Starter runden!");
-
-    game.phase = "song";
-    game.song = null;
-    game.revealed = false;
-
-    updateGame(code);
-  });
-
-  socket.on("setSong", ({ code, title, artist, year }) => {
-    const game = games[code];
-
-    if (!game) return;
-
-    if (game.hostId !== socket.id) return;
-
-    game.song = {
+    game.currentSong = {
       title,
       artist,
-      year: Number(year)
+      year: songYear,
+      url: url || `https://open.spotify.com/search/${encodeURIComponent(`${title} ${artist}`)}`
     };
-
-    game.revealed = false;
-
-    updateGame(code);
-  });
-
-  socket.on("placeSong", ({ code, position }) => {
-    const game = games[code];
-
-    if (!game) return;
-
-    const player = game.players.find(
-      (p) => p.id === socket.id
-    );
-
-    if (!player) return;
-
-    player.position = position;
-
-    updateGame(code);
-  });
-
-  socket.on("revealSong", ({ code }) => {
-    const game = games[code];
-
-    if (!game) return;
-
-    if (game.hostId !== socket.id) return;
-
-    game.revealed = true;
-
-    updateGame(code);
-  });
-
-  socket.on("nextRound", ({ code }) => {
-    const game = games[code];
-
-    if (!game) return;
-
-    if (game.hostId !== socket.id) return;
-
-    game.phase = "song";
-    game.song = null;
-    game.revealed = false;
+    game.showAnswer = false;
 
     game.players.forEach((player) => {
-      delete player.position;
+      player.selectedSlot = null;
+      player.ready = false;
+      player.lastGuessWasCorrect = null;
     });
 
-    updateGame(code);
+    if (typeof done === "function") done({ ok: true });
+    sendGame(game);
+  });
+
+  socket.on("song:place", ({ code, slot }, done) => {
+    const game = games.get(code);
+    const player = game && findPlayer(game, socket.id);
+
+    if (!game || !player || !game.currentSong || game.showAnswer) {
+      reply(done, { ok: false, message: "Placeringen kunne ikke gemmes. Opdatér siden og prøv igen." });
+      return;
+    }
+    if (!Number.isInteger(slot) || slot < 0 || slot > player.timeline.length) {
+      reply(done, { ok: false, message: "Vælg en gyldig plads på tidslinjen." });
+      return;
+    }
+
+    player.selectedSlot = slot;
+    player.ready = true;
+    reply(done, { ok: true, game: publicGame(game) });
+    sendGame(game);
+  });
+
+  socket.on("song:reveal", (code, done) => {
+    const game = games.get(code);
+
+    if (!game || game.hostId !== socket.id || !game.currentSong || game.showAnswer) {
+      reply(done, { ok: false, message: "Svaret kan ikke afsløres lige nu." });
+      return;
+    }
+    if (!game.players.every((player) => player.ready)) {
+      reply(done, { ok: false, message: "Vent til alle spillere er klar." });
+      return;
+    }
+
+    game.showAnswer = true;
+
+    game.players.forEach((player) => {
+      const guessed = Number.isInteger(player.selectedSlot);
+      player.lastGuessWasCorrect = guessed && placementIsCorrect(
+        player.timeline,
+        game.currentSong.year,
+        player.selectedSlot
+      );
+
+      if (player.lastGuessWasCorrect) {
+        player.score += 1;
+        player.timeline.splice(player.selectedSlot, 0, game.currentSong.year);
+      }
+    });
+
+    reply(done, { ok: true, game: publicGame(game) });
+    sendGame(game);
+  });
+
+  socket.on("song:next", (code, done) => {
+    const game = games.get(code);
+
+    if (!game || game.hostId !== socket.id || !game.showAnswer) {
+      reply(done, { ok: false, message: "Næste runde kan først startes, når svaret er afsløret." });
+      return;
+    }
+
+    game.currentSong = null;
+    game.showAnswer = false;
+    game.players.forEach((player) => {
+      player.selectedSlot = null;
+      player.ready = false;
+      player.lastGuessWasCorrect = null;
+    });
+
+    reply(done, { ok: true, game: publicGame(game) });
+    sendGame(game);
   });
 
   socket.on("disconnect", () => {
-    console.log("Spiller forlod spillet:", socket.id);
+    for (const game of games.values()) {
+      game.players = game.players.filter((player) => player.id !== socket.id);
 
-    Object.values(games).forEach((game) => {
-      const player = game.players.find(
-        (p) => p.id === socket.id
-      );
-
-      if (player) {
-        player.id = null;
+      if (game.players.length === 0) {
+        games.delete(game.code);
+        continue;
       }
-    });
+
+      if (game.hostId === socket.id) {
+        game.hostId = game.players[0].id;
+      }
+
+      sendGame(game);
+    }
   });
 });
 
-const PORT = process.env.PORT || 10000;
-
 server.listen(PORT, () => {
-  console.log(`Timeline Party kører på port ${PORT}`);
+  console.log(`Timeline Party kører på http://localhost:${PORT}`);
 });

@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "description": "A live multiplayer music timeline party game",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check app.js",
+    "test": "node --test"
+  },
   "dependencies": {
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
