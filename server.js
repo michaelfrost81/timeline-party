@@ -22,48 +22,72 @@ function updateGame(code) {
 
   if (!game) return;
 
-  io.to(code).emit("gameUpdate", game);
+  // The browser listens for `game:update`. Keeping the event name in one
+  // place prevents a newly created game from leaving the creator on the
+  // start screen.
+  io.to(code).emit("game:update", game);
 }
 
 io.on("connection", (socket) => {
   console.log("En spiller forbundet:", socket.id);
 
-  socket.on("createGame", ({ name, code }) => {
-    if (!code) return;
+  socket.on("createGame", ({ name, code } = {}) => {
+    const gameCode = String(code || "").trim().toUpperCase();
+    const playerName = String(name || "").trim();
+
+    if (!gameCode || !playerName) {
+      socket.emit("gameError", "Indtast dit navn, før du opretter et spil");
+      return;
+    }
+
+    if (games[gameCode]) {
+      socket.emit("gameError", "Spilkoden er optaget. Prøv igen.");
+      return;
+    }
 
     const game = {
-      code,
+      code: gameCode,
       hostId: socket.id,
       players: [],
-      phase: "song",
+      phase: "lobby",
       song: null,
-      revealed: false
+      revealed: false,
+      targetScore: 10
     };
 
-    games[code] = game;
+    games[gameCode] = game;
 
-    socket.join(code);
+    socket.join(gameCode);
 
     game.players.push({
       id: socket.id,
-      name: name || "Vært",
-      score: 0
+      name: playerName,
+      score: 0,
+      timeline: [],
+      ready: false
     });
 
-    console.log("Spil oprettet:", code);
+    console.log("Spil oprettet:", gameCode);
 
-    updateGame(code);
+    updateGame(gameCode);
   });
 
-  socket.on("joinGame", ({ name, code }) => {
-    const game = games[code];
+  socket.on("joinGame", ({ name, code } = {}) => {
+    const gameCode = String(code || "").trim().toUpperCase();
+    const playerName = String(name || "").trim();
+    const game = games[gameCode];
 
     if (!game) {
       socket.emit("gameError", "Spillet blev ikke fundet");
       return;
     }
 
-    socket.join(code);
+    if (!playerName) {
+      socket.emit("gameError", "Indtast dit navn, før du deltager");
+      return;
+    }
+
+    socket.join(gameCode);
 
     const existingPlayer = game.players.find(
       (player) => player.id === socket.id
@@ -72,12 +96,14 @@ io.on("connection", (socket) => {
     if (!existingPlayer) {
       game.players.push({
         id: socket.id,
-        name: name || "Spiller",
-        score: 0
+        name: playerName,
+        score: 0,
+        timeline: [],
+        ready: false
       });
     }
 
-    updateGame(code);
+    updateGame(gameCode);
   });
 
   socket.on("startGame", ({ code }) => {

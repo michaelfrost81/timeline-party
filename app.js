@@ -2,13 +2,17 @@ const socket=io();
 let game=null, myId=null, myCode=null, myName=localStorage.tpName||"";
 socket.on("connect",()=>myId=socket.id);
 socket.on("game:update",g=>{game=g;myCode=g.code;render();});
+socket.on("gameError",message=>alert(message));
 
 function home(){document.getElementById("app").innerHTML=`
 <h1>Timeline Party</h1><p class="tag">Kan du placere musikken rigtigt i tiden?</p>
 <div class="card"><input id="name" placeholder="Dit navn" value="${myName}"><button onclick="create()">🎉 Opret spil</button><button class="secondary" onclick="joinForm()">🎵 Deltag i spil</button></div>`}
 function create() {
   const name = document.getElementById("name").value.trim();
-  if (!name) return;
+  if (!name) {
+    alert("Indtast dit navn, før du opretter et spil");
+    return;
+  }
 
   myName = name;
   localStorage.tpName = name;
@@ -20,7 +24,7 @@ function create() {
     code: code
   });
 }function joinForm(){document.getElementById("app").innerHTML=`<h1>Timeline Party</h1><div class="card"><input id="name" placeholder="Dit navn" value="${myName}"><input id="code" placeholder="Spilkode"><button onclick="join()">Deltag</button><button class="secondary" onclick="home()">Tilbage</button></div>`}
-function join(){const n=document.getElementById("name").value.trim(),c=document.getElementById("code").value.trim().toUpperCase();if(!n||!c)return;myName=n;localStorage.tpName=n;socket.emit("joinGame",{name:n,code:c},r=>{if(!r.ok)alert(r.error)});}
+function join(){const n=document.getElementById("name").value.trim(),c=document.getElementById("code").value.trim().toUpperCase();if(!n||!c)return;myName=n;localStorage.tpName=n;socket.emit("joinGame",{name:n,code:c});}
 function esc(s){return String(s||"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
 function render(){
  if(!game)return home();
@@ -33,7 +37,7 @@ function render(){
  else if(!game.song){html+=host?`<div class="card"><h2>Ny sang</h2><input id="title" placeholder="Titel"><input id="artist" placeholder="Kunstner"><input id="year" type="number" placeholder="Årstal"><button onclick="setSong()">Start runden 🎵</button></div>`:`<div class="card">Venter på næste sang… 🎶</div>`}
  else {
    const song=game.song;
-   if(!song.revealed){
+   if(!game.revealed){
      html+=`<div class="card"><h2>🎵 Hvor hører sangen hjemme?</h2><p>Placér den mellem årstallene på din tidslinje.</p><div class="timeline">${me.timeline.map(y=>`<div class="year">${y}</div>`).join("")||"<span class='small'>Ingen sange endnu</span>"}</div><div class="slots">${Array.from({length:me.timeline.length+1},(_,i)=>`<button class="slot" onclick="place(${i})">Placer her</button>`).join("")}</div><p class="small">${me.ready?"Du er klar! Venter på de andre…":"Vælg en placering"}</p></div>`;
      if(host)html+=`<div class="card"><a href="https://open.spotify.com/search/${encodeURIComponent(song.title+" "+song.artist)}" target="_blank"><button>🎵 Afspil på Spotify</button></a><button onclick="reveal()">Afslør svaret ✨</button></div>`;   } else {
      html+=`<div class="card"><h2>🎉 Svaret</h2><h3>${esc(song.title)} – ${esc(song.artist)}</h3><div class="code">${song.year}</div><p>Point gives automatisk, hvis sangen er placeret korrekt.</p><a href="https://open.spotify.com/search/${encodeURIComponent(song.title+" "+song.artist)}" target="_blank"><button>🎵 Åbn på Spotify</button></a>${host?'<button onclick="next()">Næste runde ➜</button>':""}</div>`;   }
