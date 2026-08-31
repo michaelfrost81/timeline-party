@@ -39,6 +39,7 @@ appRoot.addEventListener("click", (event) => {
     guessDecade: () => guessDecade(Number(button.dataset.decade)),
     lockAnswer,
     challengeSong,
+    passChallenge,
     revealSong,
     nextSong
   };
@@ -153,6 +154,10 @@ function challengeSong() {
   socket.emit("song:challenge", game.code, showServerMessage);
 }
 
+function passChallenge() {
+  socket.emit("song:pass", game.code, showServerMessage);
+}
+
 function lockAnswer() {
   socket.emit("song:lock", game.code, showServerMessage);
 }
@@ -260,6 +265,7 @@ function renderPlayers() {
   const responderId = game.phase === "active_guess"
     ? game.roundPlayerId
     : game.phase === "challenge_guesses" ? game.challengeQueue[game.challengeTurnIndex] : null;
+  const decisions = game.challengeDecisions || {};
 
   return `
     <section class="card">
@@ -270,7 +276,9 @@ function renderPlayers() {
           <span>
             ${roundIsActive && player.id === responderId ? '<b class="ready-state">Vælger…</b>' : ""}
             ${roundIsActive && player.ready ? '<b class="ready-state is-ready">Låst</b>' : ""}
-            ${player.score} point · ${player.challengesRemaining}/5 challenges tilbage
+            ${game.phase === "challenge_decisions" && game.challengeEligible.includes(player.id) && !decisions[player.id] ? '<b class="ready-state">Vælger challenge…</b>' : ""}
+            <span class="player-score">${player.score} point</span>
+            <span class="challenge-count">${player.challengesRemaining}/5 challenges tilbage</span>
           </span>
         </div>
       `).join("")}
@@ -319,7 +327,8 @@ function renderRound(me, isHost) {
   const isResponder = responderId === me.id;
   const active = game.players.find((player) => player.id === game.roundPlayerId);
   const alreadyChallenged = game.challengeQueue.includes(me.id);
-  const canChallenge = game.phase === "active_guess" && me.id !== game.roundPlayerId && !alreadyChallenged && me.challengesRemaining > 0;
+  const challengeDecision = (game.challengeDecisions || {})[me.id];
+  const mustChooseChallenge = game.phase === "challenge_decisions" && game.challengeEligible.includes(me.id) && !challengeDecision;
 
   return `
     <section class="card song-card">
@@ -331,12 +340,23 @@ function renderRound(me, isHost) {
 
     <section class="card">
       <h2>${isResponder ? (me.id === game.roundPlayerId ? "DIN TUR" : "DIN CHALLENGE-TUR") : "Rundestatus"}</h2>
-      ${isResponder ? renderGuess(me) : renderWaiting(me, responderId)}
-      ${canChallenge ? '<button type="button" class="challenge-button" data-action="challengeSong">Challenge</button>' : ""}
-      ${alreadyChallenged && !me.ready ? '<p class="hint">Du er i challenge-køen. Vent på din tur.</p>' : ""}
-      ${me.challengesRemaining === 0 && me.id !== game.roundPlayerId ? '<button type="button" class="challenge-button" disabled>Ingen challenges tilbage</button>' : ""}
+      ${isResponder ? renderGuess(me) : mustChooseChallenge ? renderChallengeChoice(me) : renderWaiting(me, responderId)}
+      ${alreadyChallenged && !me.ready && !isResponder ? '<p class="hint">Du har challenged. Vent på din tur i køen.</p>' : ""}
       ${isHost ? `<button type="button" data-action="revealSong" ${game.phase === "awaiting_reveal" ? "" : "disabled"}>${game.phase === "awaiting_reveal" ? "Afslør svar" : "Venter på låste svar…"}</button>` : ""}
     </section>
+  `;
+}
+
+function renderChallengeChoice(player) {
+  return `
+    <div class="challenge-choice">
+      <p><strong>${game.players.find((item) => item.id === game.roundPlayerId).name}</strong> har låst sit svar. Vil du challenge?</p>
+      <p class="hint">Du har ${player.challengesRemaining}/5 challenges tilbage.</p>
+      <div class="choice-actions">
+        <button type="button" class="challenge-button" data-action="challengeSong" ${player.challengesRemaining > 0 ? "" : "disabled"}>Challenge</button>
+        <button type="button" class="secondary" data-action="passChallenge">Nej tak / Pas</button>
+      </div>
+    </div>
   `;
 }
 
@@ -356,6 +376,7 @@ function renderGuess(player) {
 
 function renderWaiting(me, responderId) {
   if (game.phase === "awaiting_reveal") return '<p class="ready-message">Alle svar er låst. Værten kan afsløre sangen.</p>';
+  if (game.phase === "challenge_decisions") return '<p class="hint">Venter på de andre spilleres challenge-valg…</p>';
   const responder = game.players.find((player) => player.id === responderId);
   if (me.ready) return '<p class="ready-message">Dit svar er låst.</p>';
   return `<p class="hint">Venter på ${escapeHtml(responder ? responder.name : "næste spiller")}…</p>`;

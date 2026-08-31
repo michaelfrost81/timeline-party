@@ -32,6 +32,8 @@ function publicGame(game) {
     showAnswer: game.showAnswer, activePlayerId: game.activePlayerId,
     roundPlayerId: game.roundPlayerId, phase: game.phase,
     challengeQueue: [...game.challengeQueue], challengeTurnIndex: game.challengeTurnIndex,
+    challengeEligible: [...game.challengeEligible],
+    challengeDecisions: { ...game.challengeDecisions },
     players: game.players.map(({ socketId, ...player }) => player)
   };
 }
@@ -90,12 +92,23 @@ function guessUsesDecade(game, player) {
 
 function advanceGuessPhase(game) {
   if (game.phase === "active_guess") {
-    game.phase = game.challengeQueue.length ? "challenge_guesses" : "awaiting_reveal";
+    game.challengeEligible = game.players
+      .filter((player) => player.id !== game.roundPlayerId && player.connected)
+      .map((player) => player.id);
+    game.challengeDecisions = {};
+    game.phase = game.challengeEligible.length ? "challenge_decisions" : "awaiting_reveal";
     game.challengeTurnIndex = 0;
   } else if (game.phase === "challenge_guesses") {
     game.challengeTurnIndex += 1;
     if (game.challengeTurnIndex >= game.challengeQueue.length) game.phase = "awaiting_reveal";
   }
+}
+
+function finishChallengeDecisions(game) {
+  const allDecided = game.challengeEligible.every((id) => game.challengeDecisions[id]);
+  if (!allDecided) return;
+  game.challengeTurnIndex = 0;
+  game.phase = game.challengeQueue.length ? "challenge_guesses" : "awaiting_reveal";
 }
 
 function selectGuess(socket, details, done, type) {
@@ -151,7 +164,8 @@ io.on("connection", (socket) => {
     const game = {
       code, hostId: playerId, currentSong: null, showAnswer: false,
       activePlayerId: playerId, roundPlayerId: null, phase: "lobby",
-      challengeQueue: [], challengeTurnIndex: 0, players: [player]
+      challengeQueue: [], challengeTurnIndex: 0,
+      challengeEligible: [], challengeDecisions: {}, players: [player]
     };
     games.set(code, game);
     connectPlayer(socket, game, player);
@@ -195,6 +209,8 @@ io.on("connection", (socket) => {
     game.phase = "active_guess";
     game.challengeQueue = [];
     game.challengeTurnIndex = 0;
+    game.challengeEligible = [];
+    game.challengeDecisions = {};
     game.players.forEach((player) => {
       player.selectedSlot = null; player.selectedDecade = null;
       player.ready = false; player.lastGuessWasCorrect = null;
@@ -206,14 +222,28 @@ io.on("connection", (socket) => {
   socket.on("song:challenge", (code, done) => {
     const game = games.get(code);
     const player = currentPlayer(socket, game);
-    const active = game && findPlayer(game, game.roundPlayerId);
     if (player && player.challengesRemaining <= 0) return reply(done, { ok: false, message: "Du har brugt alle 5 challenges." });
-    if (!game || !player || game.phase !== "active_guess" || !active || active.ready || player.id === active.id) {
+    if (!game || !player || game.phase !== "challenge_decisions" || !game.challengeEligible.includes(player.id)) {
       return reply(done, { ok: false, message: "Der er lukket for challenges." });
     }
-    if (game.challengeQueue.includes(player.id)) return reply(done, { ok: false, message: "Du har allerede challenged denne sang." });
+    if (game.challengeDecisions[player.id]) return reply(done, { ok: false, message: "Du har allerede valgt i denne runde." });
     player.challengesRemaining -= 1;
     game.challengeQueue.push(player.id);
+    game.challengeDecisions[player.id] = "challenge";
+    finishChallengeDecisions(game);
+    reply(done, { ok: true, game: publicGame(game) });
+    sendGame(game);
+  });
+
+  socket.on("song:pass", (code, done) => {
+    const game = games.get(code);
+    const player = currentPlayer(socket, game);
+    if (!game || !player || game.phase !== "challenge_decisions" ||
+        !game.challengeEligible.includes(player.id) || game.challengeDecisions[player.id]) {
+      return reply(done, { ok: false, message: "Du kan ikke passe lige nu." });
+    }
+    game.challengeDecisions[player.id] = "pass";
+    finishChallengeDecisions(game);
     reply(done, { ok: true, game: publicGame(game) });
     sendGame(game);
   });
@@ -257,6 +287,7 @@ io.on("connection", (socket) => {
     }
     game.currentSong = null; game.showAnswer = false; game.roundPlayerId = null; game.phase = "lobby";
     game.challengeQueue = []; game.challengeTurnIndex = 0;
+    game.challengeEligible = []; game.challengeDecisions = {};
     game.players.forEach((player) => {
       player.selectedSlot = null; player.selectedDecade = null;
       player.ready = false; player.lastGuessWasCorrect = null;

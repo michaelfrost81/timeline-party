@@ -267,6 +267,26 @@ label {
   background: #ffcf54;
 }
 
+.challenge-count,
+.player-score {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.challenge-count::before {
+  content: " · ";
+}
+
+.choice-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.choice-actions .challenge-button {
+  margin: 0;
+}
+
 .ready-message {
   margin: 14px 0;
   padding: 14px 16px;
@@ -283,5 +303,24 @@ label {
 
   .card {
     padding: 18px;
+  }
+
+  .player-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .player-row > span:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .challenge-count::before {
+    content: "";
+  }
+
+  .choice-actions {
+    grid-template-columns: 1fr;
   }
 }
