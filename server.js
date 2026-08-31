@@ -85,7 +85,7 @@ function expectedResponder(game) {
 }
 
 function guessUsesDecade(game, player) {
-  return player.id === game.roundPlayerId ? player.turnsTaken === 0 : player.timeline.length === 0;
+  return player.timeline.length === 0;
 }
 
 function advanceGuessPhase(game) {
@@ -98,11 +98,11 @@ function advanceGuessPhase(game) {
   }
 }
 
-function lockGuess(socket, details, done, type) {
+function selectGuess(socket, details, done, type) {
   const game = games.get(details.code);
   const player = currentPlayer(socket, game);
   if (!game || !player || !game.currentSong || game.showAnswer || expectedResponder(game) !== player.id || player.ready) {
-    reply(done, { ok: false, message: "Det er ikke din tur til at låse et svar." });
+    reply(done, { ok: false, message: "Det er ikke din tur til at vælge et svar." });
     return;
   }
 
@@ -121,6 +121,20 @@ function lockGuess(socket, details, done, type) {
     }
     player.selectedSlot = slot;
   }
+  reply(done, { ok: true, game: publicGame(game) });
+  sendGame(game);
+}
+
+function lockGuess(socket, code, done) {
+  const game = games.get(code);
+  const player = currentPlayer(socket, game);
+  if (!game || !player || !game.currentSong || game.showAnswer || expectedResponder(game) !== player.id || player.ready) {
+    return reply(done, { ok: false, message: "Det er ikke din tur til at låse et svar." });
+  }
+  const hasAnswer = guessUsesDecade(game, player)
+    ? Number.isInteger(player.selectedDecade)
+    : Number.isInteger(player.selectedSlot);
+  if (!hasAnswer) return reply(done, { ok: false, message: "Vælg et svar, før du låser." });
   player.ready = true;
   advanceGuessPhase(game);
   reply(done, { ok: true, game: publicGame(game) });
@@ -204,8 +218,9 @@ io.on("connection", (socket) => {
     sendGame(game);
   });
 
-  socket.on("song:place", (details, done) => lockGuess(socket, details, done, "place"));
-  socket.on("song:decade", (details, done) => lockGuess(socket, details, done, "decade"));
+  socket.on("song:place", (details, done) => selectGuess(socket, details, done, "place"));
+  socket.on("song:decade", (details, done) => selectGuess(socket, details, done, "decade"));
+  socket.on("song:lock", (code, done) => lockGuess(socket, code, done));
 
   socket.on("song:reveal", (code, done) => {
     const game = games.get(code);

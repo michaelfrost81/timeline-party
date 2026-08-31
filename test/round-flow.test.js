@@ -1,6 +1,8 @@
 const { after, before, test } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+const vm = require("node:vm");
 
 const port = 12000 + Math.floor(Math.random() * 1000);
 let serverProcess;
@@ -120,16 +122,81 @@ async function start(clients, code, year, title = "Testsang") {
   return event(clients, 0, "song:start", { code, title, artist: "Test", year, url: "https://example.com" });
 }
 
+async function selectAndLock(clients, actor, eventName, details) {
+  await event(clients, actor, eventName, details);
+  return event(clients, actor, "song:lock", details.code);
+}
+
 async function finishAndNext(clients, code) {
   const revealed = await event(clients, 0, "song:reveal", code);
   await event(clients, 0, "song:next", code);
   return revealed;
 }
 
+function renderClient(game, playerId) {
+  const root = { innerHTML: "", addEventListener() {} };
+  const handlers = {};
+  const socket = {
+    connected: true,
+    on(name, handler) { handlers[name] = handler; },
+    emit() {}
+  };
+  const storage = new Map([
+    ["timeline-party-player-id", playerId],
+    ["timeline-party-game-code", game.code]
+  ]);
+  const context = {
+    io: () => socket,
+    document: { querySelector: (selector) => selector === "#app" ? root : null },
+    localStorage: {
+      getItem: (key) => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key)
+    },
+    globalThis: { crypto: { randomUUID: () => playerId } },
+    alert() {},
+    Set,
+    Number
+  };
+  vm.runInNewContext(readFileSync("app.js", "utf8"), context);
+  handlers["game:update"](game);
+  return root.innerHTML;
+}
+
+test("tom aktiv tidslinje viser kun årtier, mens den anden spiller kun kan challenge", () => {
+  const game = {
+    code: "ABCDE", hostId: "michael", activePlayerId: "michael", roundPlayerId: "michael",
+    phase: "active_guess", challengeQueue: [], challengeTurnIndex: 0, showAnswer: false,
+    currentSong: { title: "Dancing Queen", artist: "ABBA", year: 1976, url: "https://example.com" },
+    players: [
+      { id: "michael", name: "Michael", connected: true, score: 0, timeline: [], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false },
+      { id: "frost", name: "Michael Frost", connected: true, score: 0, timeline: [], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false }
+    ]
+  };
+  const activeHtml = renderClient(game, "michael");
+  assert.match(activeHtml, /DIN TUR/);
+  assert.match(activeHtml, /1950'erne/);
+  assert.match(activeHtml, /2020'erne/);
+  assert.doesNotMatch(activeHtml, /Placér her/);
+  assert.equal((activeHtml.match(/Vælger…/g) || []).length, 1);
+
+  const waitingHtml = renderClient(game, "frost");
+  assert.match(waitingHtml, /data-action="challengeSong"/);
+  assert.doesNotMatch(waitingHtml, /data-action="guessDecade"/);
+  assert.doesNotMatch(waitingHtml, /Placér her/);
+
+  game.phase = "challenge_guesses";
+  game.challengeQueue = ["frost"];
+  const challengerHtml = renderClient(game, "frost");
+  assert.match(challengerHtml, /DIN CHALLENGE-TUR/);
+  assert.match(challengerHtml, /data-action="guessDecade"/);
+  assert.doesNotMatch(challengerHtml, /Placér her/);
+});
+
 test("første sang bruger årti og turen roterer automatisk", async () => {
   const { clients, code } = await setupPlayers(["host-a", "guest-a"]);
   await start(clients, code, 1976);
-  const locked = await event(clients, 0, "song:decade", { code, decade: 1970 });
+  const locked = await selectAndLock(clients, 0, "song:decade", { code, decade: 1970 });
   assert.equal(locked.game.phase, "awaiting_reveal");
   const revealed = await event(clients, 0, "song:reveal", code);
   const host = revealed.game.players.find((player) => player.id === "host-a");
@@ -147,11 +214,13 @@ test("flere challengers svarer i trykrækkefølge og får individuelle tidslinje
   assert.deepEqual(challenged.game.challengeQueue, ["third-b", "second-b"]);
   assert.equal(challenged.game.players.find((p) => p.id === "third-b").challengesRemaining, 4);
 
-  await event(clients, 0, "song:decade", { code, decade: 1980 });
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1980 });
+  const lateChallenge = await clients[1].emitWithAck("song:challenge", code);
+  assert.equal(lateChallenge.ok, false);
   const outOfTurn = await clients[1].emitWithAck("song:decade", { code, decade: 1980 });
   assert.equal(outOfTurn.ok, false);
-  await event(clients, 2, "song:decade", { code, decade: 1980 });
-  await event(clients, 1, "song:decade", { code, decade: 1970 });
+  await selectAndLock(clients, 2, "song:decade", { code, decade: 1980 });
+  await selectAndLock(clients, 1, "song:decade", { code, decade: 1970 });
   const revealed = await event(clients, 0, "song:reveal", code);
   assert.deepEqual(revealed.game.players.find((p) => p.id === "host-b").timeline, [1984]);
   assert.deepEqual(revealed.game.players.find((p) => p.id === "third-b").timeline, [1984]);
@@ -164,12 +233,12 @@ test("challenge-beholdning har maksimum fem", async () => {
   for (let round = 0; round < 5; round += 1) {
     await start(clients, code, 2000 + round, `Sang ${round}`);
     await event(clients, 1, "song:challenge", code);
-    await event(clients, 0, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2000 } : { code, slot: 1 });
-    await event(clients, 1, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2000 } : { code, slot: 1 });
+    await selectAndLock(clients, 0, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2000 } : { code, slot: 1 });
+    await selectAndLock(clients, 1, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2000 } : { code, slot: 1 });
     await finishAndNext(clients, code);
     // To keep host active for this inventory-focused test, play the guest's turn without a challenge.
     await start(clients, code, 2010 + round, `Mellemsang ${round}`);
-    await event(clients, 1, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2010 } : { code, slot: 1 });
+    await selectAndLock(clients, 1, "song:place", { code, slot: 1 });
     await finishAndNext(clients, code);
   }
   await start(clients, code, 2020, "Sjette challenge");
@@ -184,8 +253,8 @@ test("reconnect bevarer challenge-kø og låste svar midt i flowet", async () =>
   await start(clients, code, 1991);
   await event(clients, 1, "song:challenge", code);
   await event(clients, 2, "song:challenge", code);
-  await event(clients, 0, "song:decade", { code, decade: 1990 });
-  await event(clients, 1, "song:decade", { code, decade: 1990 });
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1990 });
+  await selectAndLock(clients, 1, "song:decade", { code, decade: 1990 });
   await clients[1].disconnect();
   await Promise.all([clients[0].nextGame(), clients[2].nextGame()]);
 
@@ -193,6 +262,9 @@ test("reconnect bevarer challenge-kø og låste svar midt i flowet", async () =>
   await reloaded.connect();
   const resumed = await reloaded.emitWithAck("game:resume", { code, playerId: "first-d" });
   assert.deepEqual(resumed.game.challengeQueue, ["first-d", "reload-d"]);
+  assert.equal(resumed.game.activePlayerId, "host-d");
+  assert.equal(resumed.game.roundPlayerId, "host-d");
+  assert.equal(resumed.game.phase, "challenge_guesses");
   assert.equal(resumed.game.challengeTurnIndex, 1);
   const player = resumed.game.players.find((item) => item.id === "first-d");
   assert.equal(player.ready, true);
@@ -200,7 +272,7 @@ test("reconnect bevarer challenge-kø og låste svar midt i flowet", async () =>
   assert.equal(player.challengesRemaining, 4);
   await Promise.all([clients[0].nextGame(), reloaded.nextGame(), clients[2].nextGame()]);
 
-  await event([clients[0], reloaded, clients[2]], 2, "song:decade", { code, decade: 1990 });
+  await selectAndLock([clients[0], reloaded, clients[2]], 2, "song:decade", { code, decade: 1990 });
   const revealed = await event([clients[0], reloaded, clients[2]], 0, "song:reveal", code);
   assert.deepEqual(revealed.game.players.find((item) => item.id === "first-d").timeline, [1991]);
   clients[0].close(); reloaded.close(); clients[2].close();
@@ -209,10 +281,10 @@ test("reconnect bevarer challenge-kø og låste svar midt i flowet", async () =>
 test("forkert kronologisk placering tilføjer ikke sangen", async () => {
   const { clients, code } = await setupPlayers(["host-e"]);
   await start(clients, code, 2000);
-  await event(clients, 0, "song:decade", { code, decade: 2000 });
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 2000 });
   await finishAndNext(clients, code);
   await start(clients, code, 1990);
-  await event(clients, 0, "song:place", { code, slot: 1 });
+  await selectAndLock(clients, 0, "song:place", { code, slot: 1 });
   const revealed = await event(clients, 0, "song:reveal", code);
   const host = revealed.game.players[0];
   assert.equal(host.lastGuessWasCorrect, false);
