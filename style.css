@@ -184,6 +184,22 @@ label {
   color: var(--accent);
 }
 
+.offline-state {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.connection-warning {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid #ffb84d88;
+  border-radius: 12px;
+  color: #ffd28f !important;
+  background: #ff9f1c1f;
+}
+
 .song-card,
 .answer-card {
   border-color: #45ffd177;

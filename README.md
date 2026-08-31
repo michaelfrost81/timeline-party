@@ -24,6 +24,8 @@ Appen er lavet som en neutral prototype. Brug ikke beskyttet Hitster-branding i 
 - Lade hver spiller placere sangen på sin egen tidslinje.
 - Afsløre svaret og give 1 point for korrekt placering.
 - Fortsætte med næste sang.
+- Genoptage den samme spiller automatisk efter reload eller en kortvarig afbrydelse.
+- Bevare navn, værtsrolle, point, tidslinje og rundestatus ved reconnect.
 
 ## Kommandoer
 
@@ -40,4 +42,5 @@ Serveren kører som standard på `http://localhost:10000`.
 - Tilføj QR-kode til spilkoden.
 - Tilføj en startskærm med regler.
 - Tilføj bedre mobilvisning for mange årstal på tidslinjen.
+- Gem rum i en database, hvis spillet også skal overleve en genstart af serveren.
 - Tilføj vedvarende rum, hvis spillet skal deployes offentligt.

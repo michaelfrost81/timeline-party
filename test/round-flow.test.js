@@ -65,6 +65,12 @@ class GameClient {
   close() {
     this.socket.close();
   }
+
+  async disconnect() {
+    const closed = new Promise((resolve) => this.socket.addEventListener("close", resolve, { once: true }));
+    this.socket.close();
+    await closed;
+  }
 }
 
 async function waitForServer() {
@@ -96,12 +102,12 @@ test("hele runden gemmer placeringer, scorer og nulstiller til næste runde", as
   const guest = new GameClient();
   await Promise.all([host.connect(), guest.connect()]);
 
-  const created = await host.emitWithAck("game:create", "Vært");
+  const created = await host.emitWithAck("game:create", { playerName: "Vært", playerId: "round-host" });
   assert.equal(created.ok, true);
   const code = created.code;
   await host.nextGame();
 
-  const joined = await guest.emitWithAck("game:join", { code, playerName: "Gæst" });
+  const joined = await guest.emitWithAck("game:join", { code, playerName: "Gæst", playerId: "round-guest" });
   assert.equal(joined.ok, true);
   await Promise.all([host.nextGame(), guest.nextGame()]);
 
@@ -172,4 +178,87 @@ test("hele runden gemmer placeringer, scorer og nulstiller til næste runde", as
 
   host.close();
   guest.close();
+});
+
+test("reconnect og reload bevarer session, spillerdata og værtsrolle", async () => {
+  const host = new GameClient();
+  const guest = new GameClient();
+  await Promise.all([host.connect(), guest.connect()]);
+
+  const created = await host.emitWithAck("game:create", {
+    playerName: "Mobilvært",
+    playerId: "stable-host-id"
+  });
+  const code = created.code;
+  await host.nextGame();
+
+  await guest.emitWithAck("game:join", {
+    code,
+    playerName: "Safari-spiller",
+    playerId: "stable-guest-id"
+  });
+  await Promise.all([host.nextGame(), guest.nextGame()]);
+
+  await host.emitWithAck("song:start", {
+    code,
+    title: "Reconnect Song",
+    artist: "Test Artist",
+    year: 2005,
+    url: "https://example.com/reconnect"
+  });
+  await Promise.all([host.nextGame(), guest.nextGame()]);
+  await host.emitWithAck("song:place", { code, slot: 0 });
+  await Promise.all([host.nextGame(), guest.nextGame()]);
+  await guest.emitWithAck("song:place", { code, slot: 0 });
+  await Promise.all([host.nextGame(), guest.nextGame()]);
+  await host.emitWithAck("song:reveal", code);
+  await Promise.all([host.nextGame(), guest.nextGame()]);
+
+  await host.disconnect();
+  const hostOfflineGame = await guest.nextGame();
+  const offlineHost = hostOfflineGame.players.find((player) => player.id === "stable-host-id");
+  assert.equal(hostOfflineGame.hostId, "stable-host-id");
+  assert.equal(offlineHost.connected, false);
+  assert.equal(offlineHost.score, 1);
+  assert.deepEqual(offlineHost.timeline, [2005]);
+
+  const reconnectedHost = new GameClient();
+  await reconnectedHost.connect();
+  const resumedHost = await reconnectedHost.emitWithAck("game:resume", {
+    code,
+    playerId: "stable-host-id"
+  });
+  assert.equal(resumedHost.ok, true);
+  assert.equal(resumedHost.game.hostId, "stable-host-id");
+  const hostAfterReconnect = resumedHost.game.players.find((player) => player.id === "stable-host-id");
+  assert.equal(hostAfterReconnect.connected, true);
+  assert.equal(hostAfterReconnect.name, "Mobilvært");
+  assert.equal(hostAfterReconnect.score, 1);
+  assert.deepEqual(hostAfterReconnect.timeline, [2005]);
+  assert.equal(hostAfterReconnect.ready, true);
+  assert.equal(hostAfterReconnect.lastGuessWasCorrect, true);
+  await Promise.all([reconnectedHost.nextGame(), guest.nextGame()]);
+
+  const nextRound = await reconnectedHost.emitWithAck("song:next", code);
+  assert.equal(nextRound.ok, true, "den genforbundne vært beholder værtsrettigheder");
+  await Promise.all([reconnectedHost.nextGame(), guest.nextGame()]);
+
+  await guest.disconnect();
+  await reconnectedHost.nextGame();
+  const reloadedGuest = new GameClient();
+  await reloadedGuest.connect();
+  const resumedGuest = await reloadedGuest.emitWithAck("game:resume", {
+    code,
+    playerId: "stable-guest-id"
+  });
+  const guestAfterReload = resumedGuest.game.players.find((player) => player.id === "stable-guest-id");
+  assert.equal(guestAfterReload.connected, true);
+  assert.equal(guestAfterReload.name, "Safari-spiller");
+  assert.equal(guestAfterReload.score, 1);
+  assert.deepEqual(guestAfterReload.timeline, [2005]);
+  assert.equal(guestAfterReload.ready, false);
+  assert.equal(guestAfterReload.selectedSlot, null);
+
+  reconnectedHost.close();
+  reloadedGuest.close();
 });

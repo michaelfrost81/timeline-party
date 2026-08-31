@@ -1,18 +1,28 @@
-
 const socket = io();
 const appRoot = document.querySelector("#app");
 
 let game = null;
-let mySocketId = null;
 let myName = localStorage.getItem("timeline-party-name") || "";
+let activeGameCode = localStorage.getItem("timeline-party-game-code") || "";
+const myPlayerId = getOrCreatePlayerId();
+let isResuming = Boolean(activeGameCode);
 
 socket.on("connect", () => {
-  mySocketId = socket.id;
+  if (activeGameCode) {
+    isResuming = true;
+    render();
+    socket.emit("game:resume", { code: activeGameCode, playerId: myPlayerId }, handleResume);
+    return;
+  }
   render();
 });
 
+socket.on("disconnect", () => render());
+
 socket.on("game:update", (nextGame) => {
   game = nextGame;
+  saveActiveGame(nextGame.code);
+  isResuming = false;
   render();
 });
 
@@ -46,6 +56,43 @@ function escapeHtml(text) {
   }[character]));
 }
 
+function getOrCreatePlayerId() {
+  const storageKey = "timeline-party-player-id";
+  let playerId = localStorage.getItem(storageKey);
+
+  if (!playerId) {
+    playerId = globalThis.crypto && globalThis.crypto.randomUUID
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(storageKey, playerId);
+  }
+
+  return playerId;
+}
+
+function saveActiveGame(code) {
+  activeGameCode = code;
+  localStorage.setItem("timeline-party-game-code", code);
+}
+
+function clearActiveGame() {
+  activeGameCode = "";
+  localStorage.removeItem("timeline-party-game-code");
+}
+
+function handleResume(result) {
+  isResuming = false;
+
+  if (!result || !result.ok) {
+    clearActiveGame();
+    game = null;
+    render();
+    return;
+  }
+
+  showServerMessage(result);
+}
+
 function saveName() {
   const input = document.querySelector("#player-name");
   myName = input.value.trim();
@@ -66,7 +113,7 @@ function createGame() {
     return;
   }
 
-  socket.emit("game:create", playerName, showServerMessage);
+  socket.emit("game:create", { playerName, playerId: myPlayerId }, showServerMessage);
 }
 
 function joinGame() {
@@ -78,7 +125,7 @@ function joinGame() {
     return;
   }
 
-  socket.emit("game:join", { code, playerName }, showServerMessage);
+  socket.emit("game:join", { code, playerName, playerId: myPlayerId }, showServerMessage);
 }
 
 function startSong() {
@@ -113,24 +160,44 @@ function showServerMessage(result) {
 
   if (result.game) {
     game = result.game;
+    saveActiveGame(result.game.code);
+    isResuming = false;
     render();
   }
 }
 
 function render() {
   if (!game) {
+    if (isResuming) {
+      appRoot.innerHTML = `
+        <section class="card hero-card">
+          <p class="eyebrow">Forbinder igen</p>
+          <h1>Genoptager spil…</h1>
+          <p>Vi finder din spiller og din tidslinje.</p>
+        </section>
+      `;
+      return;
+    }
     renderHome();
     return;
   }
 
-  const me = game.players.find((player) => player.id === mySocketId);
-  const isHost = game.hostId === mySocketId;
+  const me = game.players.find((player) => player.id === myPlayerId);
+  const isHost = game.hostId === myPlayerId;
+
+  if (!me) {
+    clearActiveGame();
+    game = null;
+    renderHome();
+    return;
+  }
 
   appRoot.innerHTML = `
     <section class="card hero-card">
       <p class="eyebrow">Spilkode</p>
       <h1>${escapeHtml(game.code)}</h1>
       <p>Del koden med de andre spillere.</p>
+      ${socket.connected ? "" : '<p class="connection-warning" role="status">Forbindelsen er midlertidigt afbrudt. Vi prøver automatisk igen…</p>'}
     </section>
 
     ${renderPlayers()}
@@ -181,7 +248,7 @@ function renderPlayers() {
       <h2>Spillere</h2>
       ${game.players.map((player) => `
         <div class="player-row">
-          <span>${escapeHtml(player.name)} ${player.id === game.hostId ? '<b class="badge">vært</b>' : ""}</span>
+          <span>${escapeHtml(player.name)} ${player.id === game.hostId ? '<b class="badge">vært</b>' : ""} ${player.connected ? "" : '<b class="offline-state">offline</b>'}</span>
           <span>
             ${roundIsActive ? `<b class="ready-state ${player.ready ? "is-ready" : ""}">${player.ready ? "Klar" : "Vælger…"}</b>` : ""}
             ${player.score} point
@@ -282,4 +349,3 @@ function renderAnswer(isHost) {
 }
 
 render();
-
