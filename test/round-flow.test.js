@@ -1,6 +1,8 @@
 const { after, before, test } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+const vm = require("node:vm");
 
 const port = 12000 + Math.floor(Math.random() * 1000);
 let serverProcess;
@@ -97,168 +99,219 @@ before(async () => {
 
 after(() => serverProcess.kill());
 
-test("hele runden gemmer placeringer, scorer og nulstiller til næste runde", async () => {
-  const host = new GameClient();
-  const guest = new GameClient();
-  await Promise.all([host.connect(), guest.connect()]);
-
-  const created = await host.emitWithAck("game:create", { playerName: "Vært", playerId: "round-host" });
-  assert.equal(created.ok, true);
+async function setupPlayers(ids) {
+  const clients = ids.map(() => new GameClient());
+  await Promise.all(clients.map((client) => client.connect()));
+  const created = await clients[0].emitWithAck("game:create", { playerName: ids[0], playerId: ids[0] });
   const code = created.code;
-  await host.nextGame();
-
-  const joined = await guest.emitWithAck("game:join", { code, playerName: "Gæst", playerId: "round-guest" });
-  assert.equal(joined.ok, true);
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-
-  const started = await host.emitWithAck("song:start", {
-    code,
-    title: "Test Song",
-    artist: "Test Artist",
-    year: 2001,
-    url: "https://example.com/song"
-  });
-  assert.equal(started.ok, true);
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-
-  const hostPlacement = await host.emitWithAck("song:place", { code, slot: 0 });
-  assert.equal(hostPlacement.game.players.find((player) => player.name === "Vært").ready, true);
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-
-  const tooEarly = await host.emitWithAck("song:reveal", code);
-  assert.deepEqual(tooEarly, { ok: false, message: "Vent til alle spillere er klar." });
-
-  const guestPlacement = await guest.emitWithAck("song:place", { code, slot: 0 });
-  assert.equal(guestPlacement.game.players.find((player) => player.name === "Gæst").ready, true);
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-
-  const revealed = await host.emitWithAck("song:reveal", code);
-  assert.equal(revealed.ok, true);
-  for (const player of revealed.game.players) {
-    assert.equal(player.lastGuessWasCorrect, true);
-    assert.equal(player.score, 1);
-    assert.deepEqual(player.timeline, [2001]);
+  await clients[0].nextGame();
+  for (let index = 1; index < clients.length; index += 1) {
+    await clients[index].emitWithAck("game:join", { code, playerName: ids[index], playerId: ids[index] });
+    await Promise.all(clients.slice(0, index + 1).map((client) => client.nextGame()));
   }
-  await Promise.all([host.nextGame(), guest.nextGame()]);
+  return { clients, code };
+}
 
-  const advanced = await host.emitWithAck("song:next", code);
-  assert.equal(advanced.ok, true);
-  assert.equal(advanced.game.currentSong, null);
-  for (const player of advanced.game.players) {
-    assert.equal(player.ready, false);
-    assert.equal(player.selectedSlot, null);
-    assert.equal(player.lastGuessWasCorrect, null);
-  }
-  await Promise.all([host.nextGame(), guest.nextGame()]);
+async function event(clients, actor, name, payload) {
+  const result = await clients[actor].emitWithAck(name, payload);
+  if (result.ok) await Promise.all(clients.map((client) => client.nextGame()));
+  return result;
+}
 
-  const secondRound = await host.emitWithAck("song:start", {
-    code,
-    title: "Older Song",
-    artist: "Test Artist",
-    year: 1990,
-    url: "https://example.com/older-song"
-  });
-  assert.equal(secondRound.ok, true);
-  await Promise.all([host.nextGame(), guest.nextGame()]);
+async function start(clients, code, year, title = "Testsang") {
+  return event(clients, 0, "song:start", { code, title, artist: "Test", year, url: "https://example.com" });
+}
 
-  await host.emitWithAck("song:place", { code, slot: 0 });
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-  await guest.emitWithAck("song:place", { code, slot: 1 });
-  await Promise.all([host.nextGame(), guest.nextGame()]);
+async function selectAndLock(clients, actor, eventName, details) {
+  await event(clients, actor, eventName, details);
+  return event(clients, actor, "song:lock", details.code);
+}
 
-  const secondReveal = await host.emitWithAck("song:reveal", code);
-  const hostResult = secondReveal.game.players.find((player) => player.name === "Vært");
-  const guestResult = secondReveal.game.players.find((player) => player.name === "Gæst");
-  assert.equal(hostResult.lastGuessWasCorrect, true);
-  assert.equal(hostResult.score, 2);
-  assert.deepEqual(hostResult.timeline, [1990, 2001]);
-  assert.equal(guestResult.lastGuessWasCorrect, false);
-  assert.equal(guestResult.score, 1);
-  assert.deepEqual(guestResult.timeline, [2001]);
+async function finishAndNext(clients, code) {
+  const revealed = await event(clients, 0, "song:reveal", code);
+  await event(clients, 0, "song:next", code);
+  return revealed;
+}
 
-  host.close();
-  guest.close();
+function renderClient(game, playerId) {
+  const root = { innerHTML: "", addEventListener() {} };
+  const handlers = {};
+  const socket = {
+    connected: true,
+    on(name, handler) { handlers[name] = handler; },
+    emit() {}
+  };
+  const storage = new Map([
+    ["timeline-party-player-id", playerId],
+    ["timeline-party-game-code", game.code]
+  ]);
+  const context = {
+    io: () => socket,
+    document: { querySelector: (selector) => selector === "#app" ? root : null },
+    localStorage: {
+      getItem: (key) => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key)
+    },
+    globalThis: { crypto: { randomUUID: () => playerId } },
+    alert() {},
+    Set,
+    Number
+  };
+  vm.runInNewContext(readFileSync("app.js", "utf8"), context);
+  handlers["game:update"](game);
+  return root.innerHTML;
+}
+
+test("tom aktiv tidslinje viser kun årtier, og challenge-valget vises først efter lås", () => {
+  const game = {
+    code: "ABCDE", hostId: "michael", activePlayerId: "michael", roundPlayerId: "michael",
+    phase: "active_guess", challengeQueue: [], challengeTurnIndex: 0, showAnswer: false,
+    currentSong: { title: "Dancing Queen", artist: "ABBA", year: 1976, url: "https://example.com" },
+    players: [
+      { id: "michael", name: "Michael", connected: true, score: 0, timeline: [], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false },
+      { id: "frost", name: "Michael Frost", connected: true, score: 0, timeline: [], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false }
+    ]
+  };
+  const activeHtml = renderClient(game, "michael");
+  assert.match(activeHtml, /DIN TUR/);
+  assert.match(activeHtml, /1950'erne/);
+  assert.match(activeHtml, /2020'erne/);
+  assert.doesNotMatch(activeHtml, /Placér her/);
+  assert.equal((activeHtml.match(/Vælger…/g) || []).length, 1);
+
+  const waitingHtml = renderClient(game, "frost");
+  assert.doesNotMatch(waitingHtml, /data-action="challengeSong"/);
+  assert.doesNotMatch(waitingHtml, /data-action="guessDecade"/);
+  assert.doesNotMatch(waitingHtml, /Placér her/);
+
+  game.players[0].ready = true;
+  game.phase = "challenge_decisions";
+  game.challengeEligible = ["frost"];
+  game.challengeDecisions = {};
+  const choiceHtml = renderClient(game, "frost");
+  assert.match(choiceHtml, /data-action="challengeSong"/);
+  assert.match(choiceHtml, /data-action="passChallenge"/);
+  assert.doesNotMatch(choiceHtml, /Placér her/);
+
+  game.phase = "challenge_guesses";
+  game.challengeQueue = ["frost"];
+  game.challengeDecisions = { frost: "challenge" };
+  const challengerHtml = renderClient(game, "frost");
+  assert.match(challengerHtml, /DIN CHALLENGE-TUR/);
+  assert.match(challengerHtml, /data-action="guessDecade"/);
+  assert.doesNotMatch(challengerHtml, /Placér her/);
 });
 
-test("reconnect og reload bevarer session, spillerdata og værtsrolle", async () => {
-  const host = new GameClient();
-  const guest = new GameClient();
-  await Promise.all([host.connect(), guest.connect()]);
+test("første sang bruger årti og turen roterer automatisk", async () => {
+  const { clients, code } = await setupPlayers(["host-a", "guest-a"]);
+  await start(clients, code, 1976);
+  const locked = await selectAndLock(clients, 0, "song:decade", { code, decade: 1970 });
+  assert.equal(locked.game.phase, "challenge_decisions");
+  const passed = await event(clients, 1, "song:pass", code);
+  assert.equal(passed.game.challengeDecisions["guest-a"], "pass");
+  assert.equal(passed.game.phase, "awaiting_reveal");
+  const revealed = await event(clients, 0, "song:reveal", code);
+  const host = revealed.game.players.find((player) => player.id === "host-a");
+  assert.equal(host.lastGuessWasCorrect, true);
+  assert.deepEqual(host.timeline, [1976]);
+  assert.equal(revealed.game.activePlayerId, "guest-a");
+  clients.forEach((client) => client.close());
+});
 
-  const created = await host.emitWithAck("game:create", {
-    playerName: "Mobilvært",
-    playerId: "stable-host-id"
-  });
-  const code = created.code;
-  await host.nextGame();
+test("flere challengers svarer i trykrækkefølge og får individuelle tidslinjer", async () => {
+  const { clients, code } = await setupPlayers(["host-b", "second-b", "third-b"]);
+  await start(clients, code, 1984);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1980 });
+  await event(clients, 2, "song:challenge", code);
+  const challenged = await event(clients, 1, "song:challenge", code);
+  assert.deepEqual(challenged.game.challengeQueue, ["third-b", "second-b"]);
+  assert.equal(challenged.game.players.find((p) => p.id === "third-b").challengesRemaining, 4);
 
-  await guest.emitWithAck("game:join", {
+  const lateChallenge = await clients[1].emitWithAck("song:challenge", code);
+  assert.equal(lateChallenge.ok, false);
+  const outOfTurn = await clients[1].emitWithAck("song:decade", { code, decade: 1980 });
+  assert.equal(outOfTurn.ok, false);
+  await selectAndLock(clients, 2, "song:decade", { code, decade: 1980 });
+  await selectAndLock(clients, 1, "song:decade", { code, decade: 1970 });
+  const revealed = await event(clients, 0, "song:reveal", code);
+  assert.deepEqual(revealed.game.players.find((p) => p.id === "host-b").timeline, [1984]);
+  assert.deepEqual(revealed.game.players.find((p) => p.id === "third-b").timeline, [1984]);
+  assert.deepEqual(revealed.game.players.find((p) => p.id === "second-b").timeline, []);
+  const advanced = await event(clients, 0, "song:next", { code, roundNumber: revealed.game.roundNumber });
+  assert.equal(advanced.game.currentSong, null);
+  assert.equal(advanced.game.activePlayerId, "second-b");
+  const repeatedAdvance = await clients[0].emitWithAck("song:next", {
     code,
-    playerName: "Safari-spiller",
-    playerId: "stable-guest-id"
+    roundNumber: revealed.game.roundNumber
   });
-  await Promise.all([host.nextGame(), guest.nextGame()]);
+  assert.equal(repeatedAdvance.ok, true, "gentaget Næste sang er idempotent");
+  assert.equal(repeatedAdvance.game.currentSong, null);
+  clients.forEach((client) => client.close());
+});
 
-  await host.emitWithAck("song:start", {
-    code,
-    title: "Reconnect Song",
-    artist: "Test Artist",
-    year: 2005,
-    url: "https://example.com/reconnect"
-  });
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-  await host.emitWithAck("song:place", { code, slot: 0 });
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-  await guest.emitWithAck("song:place", { code, slot: 0 });
-  await Promise.all([host.nextGame(), guest.nextGame()]);
-  await host.emitWithAck("song:reveal", code);
-  await Promise.all([host.nextGame(), guest.nextGame()]);
+test("challenge-beholdning har maksimum fem", async () => {
+  const { clients, code } = await setupPlayers(["host-c", "challenger-c"]);
+  for (let round = 0; round < 5; round += 1) {
+    await start(clients, code, 2000 + round, `Sang ${round}`);
+    await selectAndLock(clients, 0, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2000 } : { code, slot: 1 });
+    await event(clients, 1, "song:challenge", code);
+    await selectAndLock(clients, 1, round === 0 ? "song:decade" : "song:place", round === 0 ? { code, decade: 2000 } : { code, slot: 1 });
+    await finishAndNext(clients, code);
+    // To keep host active for this inventory-focused test, play the guest's turn without a challenge.
+    await start(clients, code, 2010 + round, `Mellemsang ${round}`);
+    await selectAndLock(clients, 1, "song:place", { code, slot: 1 });
+    await event(clients, 0, "song:pass", code);
+    await finishAndNext(clients, code);
+  }
+  await start(clients, code, 2020, "Sjette challenge");
+  await selectAndLock(clients, 0, "song:place", { code, slot: 1 });
+  const rejected = await clients[1].emitWithAck("song:challenge", code);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.message, /alle 5/);
+  clients.forEach((client) => client.close());
+});
 
-  await host.disconnect();
-  const hostOfflineGame = await guest.nextGame();
-  const offlineHost = hostOfflineGame.players.find((player) => player.id === "stable-host-id");
-  assert.equal(hostOfflineGame.hostId, "stable-host-id");
-  assert.equal(offlineHost.connected, false);
-  assert.equal(offlineHost.score, 1);
-  assert.deepEqual(offlineHost.timeline, [2005]);
+test("reconnect bevarer challenge-kø og låste svar midt i flowet", async () => {
+  const { clients, code } = await setupPlayers(["host-d", "first-d", "reload-d"]);
+  await start(clients, code, 1991);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1990 });
+  await event(clients, 1, "song:challenge", code);
+  await event(clients, 2, "song:challenge", code);
+  await selectAndLock(clients, 1, "song:decade", { code, decade: 1990 });
+  await clients[1].disconnect();
+  await Promise.all([clients[0].nextGame(), clients[2].nextGame()]);
 
-  const reconnectedHost = new GameClient();
-  await reconnectedHost.connect();
-  const resumedHost = await reconnectedHost.emitWithAck("game:resume", {
-    code,
-    playerId: "stable-host-id"
-  });
-  assert.equal(resumedHost.ok, true);
-  assert.equal(resumedHost.game.hostId, "stable-host-id");
-  const hostAfterReconnect = resumedHost.game.players.find((player) => player.id === "stable-host-id");
-  assert.equal(hostAfterReconnect.connected, true);
-  assert.equal(hostAfterReconnect.name, "Mobilvært");
-  assert.equal(hostAfterReconnect.score, 1);
-  assert.deepEqual(hostAfterReconnect.timeline, [2005]);
-  assert.equal(hostAfterReconnect.ready, true);
-  assert.equal(hostAfterReconnect.lastGuessWasCorrect, true);
-  await Promise.all([reconnectedHost.nextGame(), guest.nextGame()]);
+  const reloaded = new GameClient();
+  await reloaded.connect();
+  const resumed = await reloaded.emitWithAck("game:resume", { code, playerId: "first-d" });
+  assert.deepEqual(resumed.game.challengeQueue, ["first-d", "reload-d"]);
+  assert.equal(resumed.game.activePlayerId, "host-d");
+  assert.equal(resumed.game.roundPlayerId, "host-d");
+  assert.equal(resumed.game.phase, "challenge_guesses");
+  assert.equal(resumed.game.challengeTurnIndex, 1);
+  const player = resumed.game.players.find((item) => item.id === "first-d");
+  assert.equal(player.ready, true);
+  assert.equal(player.selectedDecade, 1990);
+  assert.equal(player.challengesRemaining, 4);
+  await Promise.all([clients[0].nextGame(), reloaded.nextGame(), clients[2].nextGame()]);
 
-  const nextRound = await reconnectedHost.emitWithAck("song:next", code);
-  assert.equal(nextRound.ok, true, "den genforbundne vært beholder værtsrettigheder");
-  await Promise.all([reconnectedHost.nextGame(), guest.nextGame()]);
+  await selectAndLock([clients[0], reloaded, clients[2]], 2, "song:decade", { code, decade: 1990 });
+  const revealed = await event([clients[0], reloaded, clients[2]], 0, "song:reveal", code);
+  assert.deepEqual(revealed.game.players.find((item) => item.id === "first-d").timeline, [1991]);
+  clients[0].close(); reloaded.close(); clients[2].close();
+});
 
-  await guest.disconnect();
-  await reconnectedHost.nextGame();
-  const reloadedGuest = new GameClient();
-  await reloadedGuest.connect();
-  const resumedGuest = await reloadedGuest.emitWithAck("game:resume", {
-    code,
-    playerId: "stable-guest-id"
-  });
-  const guestAfterReload = resumedGuest.game.players.find((player) => player.id === "stable-guest-id");
-  assert.equal(guestAfterReload.connected, true);
-  assert.equal(guestAfterReload.name, "Safari-spiller");
-  assert.equal(guestAfterReload.score, 1);
-  assert.deepEqual(guestAfterReload.timeline, [2005]);
-  assert.equal(guestAfterReload.ready, false);
-  assert.equal(guestAfterReload.selectedSlot, null);
-
-  reconnectedHost.close();
-  reloadedGuest.close();
+test("forkert kronologisk placering tilføjer ikke sangen", async () => {
+  const { clients, code } = await setupPlayers(["host-e"]);
+  await start(clients, code, 2000);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 2000 });
+  await finishAndNext(clients, code);
+  await start(clients, code, 1990);
+  await selectAndLock(clients, 0, "song:place", { code, slot: 1 });
+  const revealed = await event(clients, 0, "song:reveal", code);
+  const host = revealed.game.players[0];
+  assert.equal(host.lastGuessWasCorrect, false);
+  assert.deepEqual(host.timeline, [2000]);
+  clients[0].close();
 });
