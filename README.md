@@ -43,3 +43,4 @@ Serveren kører som standard på `http://localhost:10000`.
 - Tilføj en startskærm med regler.
 - Tilføj bedre mobilvisning for mange årstal på tidslinjen.
 - Gem rum i en database, hvis spillet også skal overleve en genstart af serveren.
+- Tilføj vedvarende rum, hvis spillet skal deployes offentligt.
