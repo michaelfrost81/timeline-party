@@ -36,6 +36,8 @@ appRoot.addEventListener("click", (event) => {
     join: joinGame,
     startSong,
     placeSong: () => placeSong(Number(button.dataset.slot)),
+    guessDecade: () => guessDecade(Number(button.dataset.decade)),
+    challengeSong,
     revealSong,
     nextSong
   };
@@ -140,6 +142,14 @@ function startSong() {
 
 function placeSong(slot) {
   socket.emit("song:place", { code: game.code, slot }, showServerMessage);
+}
+
+function guessDecade(decade) {
+  socket.emit("song:decade", { code: game.code, decade }, showServerMessage);
+}
+
+function challengeSong() {
+  socket.emit("song:challenge", game.code, showServerMessage);
 }
 
 function revealSong() {
@@ -248,10 +258,10 @@ function renderPlayers() {
       <h2>Spillere</h2>
       ${game.players.map((player) => `
         <div class="player-row">
-          <span>${escapeHtml(player.name)} ${player.id === game.hostId ? '<b class="badge">vært</b>' : ""} ${player.connected ? "" : '<b class="offline-state">offline</b>'}</span>
+          <span>${escapeHtml(player.name)} ${player.id === game.hostId ? '<b class="badge">vært</b>' : ""} ${player.id === game.activePlayerId ? '<b class="badge turn-badge">tur</b>' : ""} ${player.connected ? "" : '<b class="offline-state">offline</b>'}</span>
           <span>
-            ${roundIsActive ? `<b class="ready-state ${player.ready ? "is-ready" : ""}">${player.ready ? "Klar" : "Vælger…"}</b>` : ""}
-            ${player.score} point
+            ${roundIsActive && (player.id === game.roundPlayerId || game.challengeQueue.includes(player.id)) ? `<b class="ready-state ${player.ready ? "is-ready" : ""}">${player.ready ? "Låst" : "Vælger…"}</b>` : ""}
+            ${player.score} point · ${player.challengesRemaining}/5 challenges tilbage
           </span>
         </div>
       `).join("")}
@@ -294,25 +304,51 @@ function renderRound(me, isHost) {
     return renderAnswer(isHost);
   }
 
-  const allPlayersReady = game.players.every((player) => player.ready);
+  const responderId = game.phase === "active_guess"
+    ? game.roundPlayerId
+    : game.phase === "challenge_guesses" ? game.challengeQueue[game.challengeTurnIndex] : null;
+  const isResponder = responderId === me.id;
+  const active = game.players.find((player) => player.id === game.roundPlayerId);
+  const alreadyChallenged = game.challengeQueue.includes(me.id);
+  const canChallenge = game.phase === "active_guess" && me.id !== game.roundPlayerId && !alreadyChallenged && me.challengesRemaining > 0;
 
   return `
     <section class="card song-card">
-      <p class="eyebrow">Aktuel sang</p>
+      <p class="eyebrow">${escapeHtml(active && active.name)} har tur</p>
       <h2>${escapeHtml(game.currentSong.title)}</h2>
       <p>${escapeHtml(game.currentSong.artist)}</p>
       <a class="button-link" href="${escapeHtml(game.currentSong.url)}" target="_blank" rel="noreferrer">Åbn musik</a>
     </section>
 
     <section class="card">
-      <h2>Din tidslinje</h2>
-      ${renderTimeline(me)}
-      ${me.ready
-        ? '<div class="ready-message" role="status"><strong>Du er klar!</strong> Venter på de andre…</div>'
-        : '<p class="hint">Vælg hvor sangens årstal passer ind.</p>'}
-      ${isHost ? `<button type="button" data-action="revealSong" ${allPlayersReady ? "" : "disabled"}>${allPlayersReady ? "Afslør svar" : "Venter på alle spillere…"}</button>` : ""}
+      <h2>${isResponder ? "Dit svar" : "Rundestatus"}</h2>
+      ${isResponder ? renderGuess(me) : renderWaiting(me, responderId)}
+      ${canChallenge ? '<button type="button" class="challenge-button" data-action="challengeSong">Challenge</button>' : ""}
+      ${alreadyChallenged && !me.ready ? '<p class="hint">Du er i challenge-køen. Vent på din tur.</p>' : ""}
+      ${me.challengesRemaining === 0 && me.id !== game.roundPlayerId ? '<button type="button" class="challenge-button" disabled>Ingen challenges tilbage</button>' : ""}
+      ${isHost ? `<button type="button" data-action="revealSong" ${game.phase === "awaiting_reveal" ? "" : "disabled"}>${game.phase === "awaiting_reveal" ? "Afslør svar" : "Venter på låste svar…"}</button>` : ""}
     </section>
   `;
+}
+
+function renderGuess(player) {
+  if (player.ready) return '<div class="ready-message" role="status"><strong>Svaret er låst!</strong></div>';
+  const usesDecade = player.id === game.roundPlayerId ? player.turnsTaken === 0 : player.timeline.length === 0;
+  if (!usesDecade) {
+    return `${renderTimeline(player)}<p class="hint">Placér sangen på din egen tidslinje. Dit tryk låser svaret.</p>`;
+  }
+  const decades = [];
+  for (let decade = 1950; decade <= 2020; decade += 10) {
+    decades.push(`<button type="button" class="decade" data-action="guessDecade" data-decade="${decade}">${decade}'erne</button>`);
+  }
+  return `<p class="hint">Din første sang: vælg årti. Dit tryk låser svaret.</p><div class="decades">${decades.join("")}</div>`;
+}
+
+function renderWaiting(me, responderId) {
+  if (game.phase === "awaiting_reveal") return '<p class="ready-message">Alle svar er låst. Værten kan afsløre sangen.</p>';
+  const responder = game.players.find((player) => player.id === responderId);
+  if (me.ready) return '<p class="ready-message">Dit svar er låst.</p>';
+  return `<p class="hint">Venter på ${escapeHtml(responder ? responder.name : "næste spiller")}…</p>`;
 }
 
 function renderTimeline(player) {
@@ -332,12 +368,13 @@ function renderTimeline(player) {
 }
 
 function renderAnswer(isHost) {
+  const participants = new Set([game.roundPlayerId, ...game.challengeQueue]);
   return `
     <section class="card answer-card">
       <p class="eyebrow">Svar</p>
       <h2>${escapeHtml(game.currentSong.title)} er fra ${game.currentSong.year}</h2>
       <p>${escapeHtml(game.currentSong.artist)}</p>
-      ${game.players.map((player) => `
+      ${game.players.filter((player) => participants.has(player.id)).map((player) => `
         <div class="player-row">
           <span>${player.lastGuessWasCorrect ? "✅" : "❌"} ${escapeHtml(player.name)}</span>
           <span>${player.score} point</span>

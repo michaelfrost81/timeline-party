@@ -173,6 +173,11 @@ label {
   text-transform: uppercase;
 }
 
+.turn-badge {
+  color: white;
+  background: var(--secondary);
+}
+
 .ready-state {
   display: inline-block;
   margin-right: 10px;
@@ -237,6 +242,24 @@ label {
 .hint {
   margin: 14px 0;
   color: var(--muted);
+}
+
+.decades {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.decade {
+  background: linear-gradient(135deg, var(--secondary), #8253d7);
+}
+
+.challenge-button {
+  margin: 14px 0;
+  border: 2px solid #ffcf54;
+  color: #1b1530;
+  background: #ffcf54;
 }
 
 .ready-message {
