@@ -6,6 +6,7 @@ let myName = localStorage.getItem("timeline-party-name") || "";
 let activeGameCode = localStorage.getItem("timeline-party-game-code") || "";
 const myPlayerId = getOrCreatePlayerId();
 let isResuming = Boolean(activeGameCode);
+let nextSongPending = false;
 
 socket.on("connect", () => {
   if (activeGameCode) {
@@ -21,6 +22,7 @@ socket.on("disconnect", () => render());
 
 socket.on("game:update", (nextGame) => {
   game = nextGame;
+  nextSongPending = false;
   saveActiveGame(nextGame.code);
   isResuming = false;
   render();
@@ -167,7 +169,14 @@ function revealSong() {
 }
 
 function nextSong() {
-  socket.emit("song:next", game.code, showServerMessage);
+  if (nextSongPending || !game.showAnswer) return;
+  nextSongPending = true;
+  render();
+  socket.emit("song:next", { code: game.code, roundNumber: game.roundNumber }, (result) => {
+    nextSongPending = false;
+    showServerMessage(result);
+    if (!result || !result.game) render();
+  });
 }
 
 function showServerMessage(result) {
@@ -411,7 +420,7 @@ function renderAnswer(isHost) {
           <span>${player.score} point</span>
         </div>
       `).join("")}
-      ${isHost ? '<button type="button" data-action="nextSong">Næste sang</button>' : ""}
+      ${isHost ? `<button type="button" data-action="nextSong" ${nextSongPending ? "disabled" : ""}>${nextSongPending ? "Går videre…" : "Næste sang"}</button>` : ""}
     </section>
   `;
 }

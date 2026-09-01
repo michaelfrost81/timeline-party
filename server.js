@@ -31,6 +31,7 @@ function publicGame(game) {
     code: game.code, hostId: game.hostId, currentSong: game.currentSong,
     showAnswer: game.showAnswer, activePlayerId: game.activePlayerId,
     roundPlayerId: game.roundPlayerId, phase: game.phase,
+    roundNumber: game.roundNumber,
     challengeQueue: [...game.challengeQueue], challengeTurnIndex: game.challengeTurnIndex,
     challengeEligible: [...game.challengeEligible],
     challengeDecisions: { ...game.challengeDecisions },
@@ -164,6 +165,7 @@ io.on("connection", (socket) => {
     const game = {
       code, hostId: playerId, currentSong: null, showAnswer: false,
       activePlayerId: playerId, roundPlayerId: null, phase: "lobby",
+      roundNumber: 0, lastAdvancedRound: null,
       challengeQueue: [], challengeTurnIndex: 0,
       challengeEligible: [], challengeDecisions: {}, players: [player]
     };
@@ -204,6 +206,7 @@ io.on("connection", (socket) => {
     const songYear = Number(year);
     if (!title || !artist || !Number.isInteger(songYear)) return reply(done, { ok: false, message: "Udfyld titel, kunstner og årstal." });
     game.currentSong = { title, artist, year: songYear, url: url || `https://open.spotify.com/search/${encodeURIComponent(`${title} ${artist}`)}` };
+    game.roundNumber += 1;
     game.showAnswer = false;
     game.roundPlayerId = game.activePlayerId;
     game.phase = "active_guess";
@@ -280,11 +283,22 @@ io.on("connection", (socket) => {
     sendGame(game);
   });
 
-  socket.on("song:next", (code, done) => {
+  socket.on("song:next", (details, done) => {
+    const code = typeof details === "string" ? details : details && details.code;
+    const requestedRound = details && typeof details === "object" ? details.roundNumber : null;
     const game = games.get(code);
-    if (!game || game.hostId !== socket.data.playerId || !currentPlayer(socket, game) || game.phase !== "revealed") {
+    if (!game || game.hostId !== socket.data.playerId || !currentPlayer(socket, game)) {
+      return reply(done, { ok: false, message: "Kun værten kan gå videre til næste sang." });
+    }
+    // A double tap or a delayed acknowledgement may repeat the same command.
+    // Treat it as successful instead of showing an incorrect not-revealed error.
+    if (!game.currentSong && requestedRound === game.lastAdvancedRound) {
+      return reply(done, { ok: true, game: publicGame(game) });
+    }
+    if (!game.showAnswer && game.phase !== "revealed") {
       return reply(done, { ok: false, message: "Næste runde kan først startes, når svaret er afsløret." });
     }
+    game.lastAdvancedRound = game.roundNumber;
     game.currentSong = null; game.showAnswer = false; game.roundPlayerId = null; game.phase = "lobby";
     game.challengeQueue = []; game.challengeTurnIndex = 0;
     game.challengeEligible = []; game.challengeDecisions = {};

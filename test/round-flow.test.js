@@ -238,9 +238,15 @@ test("flere challengers svarer i trykrækkefølge og får individuelle tidslinje
   assert.deepEqual(revealed.game.players.find((p) => p.id === "host-b").timeline, [1984]);
   assert.deepEqual(revealed.game.players.find((p) => p.id === "third-b").timeline, [1984]);
   assert.deepEqual(revealed.game.players.find((p) => p.id === "second-b").timeline, []);
-  const advanced = await event(clients, 0, "song:next", code);
+  const advanced = await event(clients, 0, "song:next", { code, roundNumber: revealed.game.roundNumber });
   assert.equal(advanced.game.currentSong, null);
   assert.equal(advanced.game.activePlayerId, "second-b");
+  const repeatedAdvance = await clients[0].emitWithAck("song:next", {
+    code,
+    roundNumber: revealed.game.roundNumber
+  });
+  assert.equal(repeatedAdvance.ok, true, "gentaget Næste sang er idempotent");
+  assert.equal(repeatedAdvance.game.currentSong, null);
   clients.forEach((client) => client.close());
 });
 
