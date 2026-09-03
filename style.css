@@ -80,6 +80,12 @@ button:disabled {
   background: #ffffff1f;
 }
 
+.danger { border: 1px solid #ff6b7a99; background: #ff526633; }
+.game-actions { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--card-border); }
+.game-actions summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+.game-actions-buttons { display: flex; gap: 10px; margin-top: 12px; }
+.game-actions-buttons button { width: auto; }
+
 input {
   width: 100%;
   min-height: 48px;
@@ -173,6 +179,11 @@ label {
   text-transform: uppercase;
 }
 
+.turn-badge {
+  color: white;
+  background: var(--secondary);
+}
+
 .ready-state {
   display: inline-block;
   margin-right: 10px;
@@ -223,6 +234,14 @@ label {
   background: linear-gradient(135deg, var(--secondary), var(--primary));
 }
 
+.slot.occupied,
+.decade.occupied {
+  border: 2px solid #ffcf54;
+  color: #ffdf87;
+  background: #ffcf5426;
+  opacity: 1;
+}
+
 .year {
   min-height: 58px;
   display: grid;
@@ -237,6 +256,49 @@ label {
 .hint {
   margin: 14px 0;
   color: var(--muted);
+}
+
+.decades {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.decade {
+  background: linear-gradient(135deg, var(--secondary), #8253d7);
+}
+
+.decade.selected {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.challenge-button {
+  margin: 14px 0;
+  border: 2px solid #ffcf54;
+  color: #1b1530;
+  background: #ffcf54;
+}
+
+.challenge-count,
+.player-score {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.challenge-count::before {
+  content: " · ";
+}
+
+.choice-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.choice-actions .challenge-button {
+  margin: 0;
 }
 
 .ready-message {
@@ -256,4 +318,26 @@ label {
   .card {
     padding: 18px;
   }
+
+  .player-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .player-row > span:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .challenge-count::before {
+    content: "";
+  }
+
+  .choice-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .game-actions-buttons { align-items: stretch; flex-direction: column; }
+  .game-actions-buttons button { width: 100%; }
 }
