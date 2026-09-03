@@ -80,6 +80,14 @@ button:disabled {
   background: #ffffff1f;
 }
 
+.danger {
+  background: #b52f54;
+}
+
+.game-actions button + button {
+  margin-top: 10px;
+}
+
 input {
   width: 100%;
   min-height: 48px;

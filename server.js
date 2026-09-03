@@ -155,6 +155,30 @@ function lockGuess(socket, code, done) {
   sendGame(game);
 }
 
+function resetGame(game) {
+  game.currentSong = null;
+  game.showAnswer = false;
+  game.activePlayerId = game.hostId;
+  game.roundPlayerId = null;
+  game.phase = "lobby";
+  game.roundNumber = 0;
+  game.lastAdvancedRound = null;
+  game.challengeQueue = [];
+  game.challengeTurnIndex = 0;
+  game.challengeEligible = [];
+  game.challengeDecisions = {};
+  game.players.forEach((player) => {
+    player.score = 0;
+    player.timeline = [];
+    player.turnsTaken = 0;
+    player.challengesRemaining = 5;
+    player.selectedSlot = null;
+    player.selectedDecade = null;
+    player.ready = false;
+    player.lastGuessWasCorrect = null;
+  });
+}
+
 io.on("connection", (socket) => {
   socket.on("game:create", (details, done) => {
     const playerId = details && details.playerId;
@@ -196,6 +220,42 @@ io.on("connection", (socket) => {
     connectPlayer(socket, game, player);
     reply(done, { ok: true, code: game.code, game: publicGame(game) });
     sendGame(game);
+  });
+
+  socket.on("game:restart", (code, done) => {
+    const game = games.get(code);
+    if (!game || game.hostId !== socket.data.playerId || !currentPlayer(socket, game)) {
+      return reply(done, { ok: false, message: "Kun værten kan starte spillet forfra." });
+    }
+    resetGame(game);
+    reply(done, { ok: true, game: publicGame(game) });
+    sendGame(game);
+  });
+
+  socket.on("game:leave", (code, done) => {
+    const game = games.get(code);
+    const player = currentPlayer(socket, game);
+    if (!game || !player) return reply(done, { ok: false, message: "Du er ikke med i dette spil." });
+    if (player.id === game.hostId) {
+      return reply(done, { ok: false, message: "Værten skal afslutte spillet for alle." });
+    }
+    game.players = game.players.filter((item) => item.id !== player.id);
+    socket.leave(game.code);
+    delete socket.data.gameCode;
+    delete socket.data.playerId;
+    reply(done, { ok: true });
+    sendGame(game);
+  });
+
+  socket.on("game:end", (code, done) => {
+    const game = games.get(code);
+    if (!game || game.hostId !== socket.data.playerId || !currentPlayer(socket, game)) {
+      return reply(done, { ok: false, message: "Kun værten kan afslutte spillet." });
+    }
+    io.to(game.code).emit("game:ended");
+    games.delete(game.code);
+    cancelCleanup(game.code);
+    reply(done, { ok: true });
   });
 
   socket.on("song:start", ({ code, title, artist, year, url }, done) => {

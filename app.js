@@ -20,6 +20,8 @@ socket.on("connect", () => {
 
 socket.on("disconnect", () => render());
 
+socket.on("game:ended", () => leaveGameView("Værten har afsluttet spillet."));
+
 socket.on("game:update", (nextGame) => {
   game = nextGame;
   nextSongPending = false;
@@ -43,7 +45,10 @@ appRoot.addEventListener("click", (event) => {
     challengeSong,
     passChallenge,
     revealSong,
-    nextSong
+    nextSong,
+    restartGame,
+    leaveGame,
+    endGame
   };
 
   const action = actions[button.dataset.action];
@@ -179,6 +184,35 @@ function nextSong() {
   });
 }
 
+function restartGame() {
+  if (!confirm("Vil du starte spillet forfra? Point, tidslinjer og challenges nulstilles.")) return;
+  socket.emit("game:restart", game.code, showServerMessage);
+}
+
+function leaveGame() {
+  if (!confirm("Vil du forlade spillet?")) return;
+  socket.emit("game:leave", game.code, (result) => {
+    if (result && result.ok) leaveGameView();
+    else showServerMessage(result);
+  });
+}
+
+function endGame() {
+  if (!confirm("Vil du afslutte spillet for alle spillere?")) return;
+  socket.emit("game:end", game.code, (result) => {
+    if (result && result.ok) leaveGameView();
+    else showServerMessage(result);
+  });
+}
+
+function leaveGameView(message) {
+  clearActiveGame();
+  game = null;
+  isResuming = false;
+  if (message) alert(message);
+  render();
+}
+
 function showServerMessage(result) {
   if (!result) return;
 
@@ -232,6 +266,20 @@ function render() {
     ${renderPlayers()}
 
     ${!game.currentSong ? renderHostForm(isHost) : renderRound(me, isHost)}
+
+    ${renderGameActions(isHost)}
+  `;
+}
+
+function renderGameActions(isHost) {
+  return `
+    <section class="card game-actions">
+      <h2>Spilmenu</h2>
+      ${isHost ? '<button type="button" class="secondary" data-action="restartGame">Start forfra</button>' : ""}
+      ${isHost
+        ? '<button type="button" class="danger" data-action="endGame">Afslut spil</button>'
+        : '<button type="button" class="danger" data-action="leaveGame">Forlad spillet</button>'}
+    </section>
   `;
 }
 

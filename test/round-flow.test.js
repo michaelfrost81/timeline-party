@@ -315,3 +315,42 @@ test("forkert kronologisk placering tilføjer ikke sangen", async () => {
   assert.deepEqual(host.timeline, [2000]);
   clients[0].close();
 });
+
+test("værten kan starte forfra uden at miste spillere", async () => {
+  const { clients, code } = await setupPlayers(["host-reset", "guest-reset"]);
+  await start(clients, code, 1999);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1990 });
+  await event(clients, 1, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  const restarted = await event(clients, 0, "game:restart", code);
+  assert.equal(restarted.game.currentSong, null);
+  assert.equal(restarted.game.phase, "lobby");
+  assert.equal(restarted.game.roundNumber, 0);
+  assert.equal(restarted.game.activePlayerId, "host-reset");
+  assert.deepEqual(restarted.game.players.map((player) => ({
+    score: player.score,
+    timeline: player.timeline,
+    challengesRemaining: player.challengesRemaining
+  })), [
+    { score: 0, timeline: [], challengesRemaining: 5 },
+    { score: 0, timeline: [], challengesRemaining: 5 }
+  ]);
+  clients.forEach((client) => client.close());
+});
+
+test("spillere kan forlade, og værten kan afslutte spillet", async () => {
+  const { clients, code } = await setupPlayers(["host-exit", "guest-exit"]);
+  const left = await clients[1].emitWithAck("game:leave", code);
+  assert.equal(left.ok, true);
+  const afterLeave = await clients[0].nextGame();
+  assert.deepEqual(afterLeave.players.map((player) => player.id), ["host-exit"]);
+
+  const endedMessage = clients[0].waitFor((message) => message.startsWith('42["game:ended"'));
+  const ended = await clients[0].emitWithAck("game:end", code);
+  assert.equal(ended.ok, true);
+  await endedMessage;
+  const resume = await clients[0].emitWithAck("game:resume", { code, playerId: "host-exit" });
+  assert.equal(resume.ok, false);
+  clients.forEach((client) => client.close());
+});
