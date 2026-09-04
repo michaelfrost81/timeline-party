@@ -659,9 +659,11 @@ function renderRound(me, isHost) {
   return `
     <section class="card song-card">
       <p class="eyebrow">${escapeHtml(active && active.name)} har tur</p>
-      <h2>${escapeHtml(game.currentSong.title)}</h2>
-      <p>${escapeHtml(game.currentSong.artist)}</p>
-      <a class="button-link" href="${escapeHtml(game.currentSong.url)}" target="_blank" rel="noreferrer">Åbn musik</a>
+      <h2>🎵 Hitster-sang</h2>
+      <p>Lyt til sangen og placér den på tidslinjen.</p>
+      ${game.currentSong.url
+        ? `<a class="button-link" href="${escapeHtml(game.currentSong.url)}" target="_blank" rel="noreferrer">Åbn musik</a>`
+        : ""}
     </section>
 
     <section class="card">
