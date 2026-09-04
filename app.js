@@ -397,7 +397,7 @@ function renderRound(me, isHost) {
 
     <section class="card">
       <h2>${isResponder ? (me.id === game.roundPlayerId ? "DIN TUR" : "DIN CHALLENGE-TUR") : "Rundestatus"}</h2>
-      ${isResponder ? renderGuess(me) : mustChooseChallenge ? renderChallengeChoice(me) : renderWaiting(me, responderId)}
+      ${isResponder ? renderGuess(me, active) : mustChooseChallenge ? renderChallengeChoice(me) : renderWaiting(me, responderId)}
       ${alreadyChallenged && !me.ready && !isResponder ? '<p class="hint">Du har challenged. Vent på din tur i køen.</p>' : ""}
       ${isHost ? `<button type="button" data-action="revealSong" ${game.phase === "awaiting_reveal" ? "" : "disabled"}>${game.phase === "awaiting_reveal" ? "Afslør svar" : "Venter på låste svar…"}</button>` : ""}
     </section>
@@ -417,18 +417,19 @@ function renderChallengeChoice(player) {
   `;
 }
 
-function renderGuess(player) {
+function renderGuess(player, activePlayer) {
   if (player.ready) return '<div class="ready-message" role="status"><strong>Svaret er låst!</strong></div>';
-  const usesDecade = player.timeline.length === 0;
+  const referenceTimeline = activePlayer.timeline;
+  const usesDecade = referenceTimeline.length === 0;
   if (!usesDecade) {
-    return `${renderTimeline(player)}<p class="hint">Placér sangen på din egen tidslinje.</p><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedSlot) ? "" : "disabled"}>Lås svar</button>`;
+    return `${renderTimeline(referenceTimeline, player)}<p class="hint">Placér sangen ud fra ${escapeHtml(activePlayer.name)}s tidslinje.</p><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedSlot) ? "" : "disabled"}>Lås svar</button>`;
   }
   const decades = [];
   for (let decade = 1950; decade <= 2020; decade += 10) {
     const selected = player.selectedDecade === decade;
     decades.push(`<button type="button" class="decade ${selected ? "selected" : ""}" data-action="guessDecade" data-decade="${decade}">${decade}'erne${selected ? " ✓" : ""}</button>`);
   }
-  return `<p class="hint">Din tidslinje er tom. Vælg hvilket årti sangen er fra.</p><div class="decades">${decades.join("")}</div><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedDecade) ? "" : "disabled"}>Lås svar</button>`;
+  return `<p class="hint">Den aktive spillers tidslinje er tom. Vælg hvilket årti sangen er fra.</p><div class="decades">${decades.join("")}</div><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedDecade) ? "" : "disabled"}>Lås svar</button>`;
 }
 
 function renderWaiting(me, responderId) {
@@ -439,8 +440,7 @@ function renderWaiting(me, responderId) {
   return `<p class="hint">Venter på ${escapeHtml(responder ? responder.name : "næste spiller")}…</p>`;
 }
 
-function renderTimeline(player) {
-  const timeline = player.timeline;
+function renderTimeline(timeline, player) {
   const slots = [];
 
   for (let index = 0; index <= timeline.length; index += 1) {

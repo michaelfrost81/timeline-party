@@ -170,7 +170,7 @@ test("tom aktiv tidslinje viser kun årtier, og challenge-valget vises først ef
     currentSong: { title: "Dancing Queen", artist: "ABBA", year: 1976, url: "https://example.com" },
     players: [
       { id: "michael", name: "Michael", connected: true, score: 0, timeline: [], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false },
-      { id: "frost", name: "Michael Frost", connected: true, score: 0, timeline: [], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false }
+      { id: "frost", name: "Michael Frost", connected: true, score: 0, timeline: [1988, 2001], challengesRemaining: 5, selectedSlot: null, selectedDecade: null, ready: false }
     ]
   };
   const activeHtml = renderClient(game, "michael");
@@ -201,6 +201,27 @@ test("tom aktiv tidslinje viser kun årtier, og challenge-valget vises først ef
   assert.match(challengerHtml, /DIN CHALLENGE-TUR/);
   assert.match(challengerHtml, /data-action="guessDecade"/);
   assert.doesNotMatch(challengerHtml, /Placér her/);
+});
+
+test("challengers ser den aktive spillers årstal og placeringer", () => {
+  const game = {
+    code: "ABCDE", hostId: "active", activePlayerId: "active", roundPlayerId: "active",
+    phase: "challenge_guesses", challengeQueue: ["challenger"], challengeTurnIndex: 0,
+    challengeEligible: ["challenger"], challengeDecisions: { challenger: "challenge" }, showAnswer: false,
+    currentSong: { title: "Testsang", artist: "Test", year: 1980, url: "https://example.com" },
+    players: [
+      { id: "active", name: "Anna", connected: true, score: 0, timeline: [1976, 1992], challengesRemaining: 5, selectedSlot: 1, selectedDecade: null, ready: true },
+      { id: "challenger", name: "Bo", connected: true, score: 0, timeline: [1960, 2005, 2015], challengesRemaining: 4, selectedSlot: null, selectedDecade: null, ready: false }
+    ]
+  };
+
+  const html = renderClient(game, "challenger");
+  assert.match(html, /1976/);
+  assert.match(html, /1992/);
+  assert.doesNotMatch(html, /1960/);
+  assert.doesNotMatch(html, /2005/);
+  assert.doesNotMatch(html, /2015/);
+  assert.equal((html.match(/data-action="placeSong"/g) || []).length, 3);
 });
 
 test("første sang bruger årti og turen roterer automatisk", async () => {
@@ -247,6 +268,45 @@ test("flere challengers svarer i trykrækkefølge og får individuelle tidslinje
   });
   assert.equal(repeatedAdvance.ok, true, "gentaget Næste sang er idempotent");
   assert.equal(repeatedAdvance.game.currentSong, null);
+  clients.forEach((client) => client.close());
+});
+
+test("alle gætter mod aktiv tidslinje, men vindere får sangen kronologisk på deres egen", async () => {
+  const { clients, code } = await setupPlayers(["active-shared", "challenger-shared"]);
+
+  await start(clients, code, 1976);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1970 });
+  await event(clients, 1, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 1985);
+  await selectAndLock(clients, 1, "song:decade", { code, decade: 1980 });
+  await event(clients, 0, "song:challenge", code);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1980 });
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 1992);
+  await selectAndLock(clients, 0, "song:place", { code, slot: 2 });
+  await event(clients, 1, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 2005);
+  await selectAndLock(clients, 1, "song:place", { code, slot: 1 });
+  await event(clients, 0, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 1980);
+  await selectAndLock(clients, 0, "song:place", { code, slot: 1 });
+  await event(clients, 1, "song:challenge", code);
+  await selectAndLock(clients, 1, "song:place", { code, slot: 1 });
+  const revealed = await event(clients, 0, "song:reveal", code);
+
+  const active = revealed.game.players.find((player) => player.id === "active-shared");
+  const challenger = revealed.game.players.find((player) => player.id === "challenger-shared");
+  assert.equal(active.lastGuessWasCorrect, true);
+  assert.equal(challenger.lastGuessWasCorrect, true);
+  assert.deepEqual(active.timeline, [1976, 1980, 1985, 1992]);
+  assert.deepEqual(challenger.timeline, [1980, 1985, 2005]);
   clients.forEach((client) => client.close());
 });
 

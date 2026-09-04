@@ -87,8 +87,18 @@ function expectedResponder(game) {
   return null;
 }
 
-function guessUsesDecade(game, player) {
-  return player.timeline.length === 0;
+function roundTimeline(game) {
+  const roundPlayer = findPlayer(game, game.roundPlayerId);
+  return roundPlayer ? roundPlayer.timeline : [];
+}
+
+function guessUsesDecade(game) {
+  return roundTimeline(game).length === 0;
+}
+
+function insertChronologically(timeline, year) {
+  const insertion = timeline.findIndex((existingYear) => existingYear > year);
+  timeline.splice(insertion === -1 ? timeline.length : insertion, 0, year);
 }
 
 function advanceGuessPhase(game) {
@@ -120,7 +130,7 @@ function selectGuess(socket, details, done, type) {
     return;
   }
 
-  if (guessUsesDecade(game, player)) {
+  if (guessUsesDecade(game)) {
     const decade = Number(details.decade);
     if (type !== "decade" || !Number.isInteger(decade) || decade % 10 !== 0) {
       reply(done, { ok: false, message: "Vælg et gyldigt årti." });
@@ -129,7 +139,7 @@ function selectGuess(socket, details, done, type) {
     player.selectedDecade = decade;
   } else {
     const slot = Number(details.slot);
-    if (type !== "place" || !Number.isInteger(slot) || slot < 0 || slot > player.timeline.length) {
+    if (type !== "place" || !Number.isInteger(slot) || slot < 0 || slot > roundTimeline(game).length) {
       reply(done, { ok: false, message: "Vælg en gyldig plads på tidslinjen." });
       return;
     }
@@ -145,7 +155,7 @@ function lockGuess(socket, code, done) {
   if (!game || !player || !game.currentSong || game.showAnswer || expectedResponder(game) !== player.id || player.ready) {
     return reply(done, { ok: false, message: "Det er ikke din tur til at låse et svar." });
   }
-  const hasAnswer = guessUsesDecade(game, player)
+  const hasAnswer = guessUsesDecade(game)
     ? Number.isInteger(player.selectedDecade)
     : Number.isInteger(player.selectedSlot);
   if (!hasAnswer) return reply(done, { ok: false, message: "Vælg et svar, før du låser." });
@@ -323,17 +333,19 @@ io.on("connection", (socket) => {
     game.showAnswer = true;
     game.phase = "revealed";
     const participants = [game.roundPlayerId, ...game.challengeQueue];
+    // Every answer in the round is judged against the active player's timeline
+    // as it looked before any winner receives the song.
+    const referenceTimeline = [...roundTimeline(game)];
+    const usesDecade = referenceTimeline.length === 0;
     participants.forEach((id) => {
       const player = findPlayer(game, id);
-      const usesDecade = guessUsesDecade(game, player);
       const correct = usesDecade
         ? player.selectedDecade === Math.floor(game.currentSong.year / 10) * 10
-        : placementIsCorrect(player.timeline, game.currentSong.year, player.selectedSlot);
+        : placementIsCorrect(referenceTimeline, game.currentSong.year, player.selectedSlot);
       player.lastGuessWasCorrect = correct;
       if (correct) {
         player.score += 1;
-        const insertion = usesDecade ? 0 : player.selectedSlot;
-        player.timeline.splice(insertion, 0, game.currentSong.year);
+        insertChronologically(player.timeline, game.currentSong.year);
       }
     });
     findPlayer(game, game.roundPlayerId).turnsTaken += 1;
