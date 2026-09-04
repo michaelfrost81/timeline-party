@@ -330,7 +330,8 @@ function useQrSong() {
     title: song.title,
     artist: song.artist,
     year: song.year,
-    url: ""
+    url: "",
+    source: "hitster"
   }, showServerMessage);
 }
 
@@ -626,16 +627,16 @@ function renderHostForm(isHost) {
     <section class="card">
       <h2>Vælg næste sang</h2>
       <label for="song-title">Titel</label>
-      <input id="song-title" placeholder="Dancing Queen">
+      <input id="song-title">
 
       <label for="song-artist">Kunstner</label>
-      <input id="song-artist" placeholder="ABBA">
+      <input id="song-artist">
 
       <label for="song-year">Årstal</label>
-      <input id="song-year" type="number" placeholder="1976">
+      <input id="song-year" type="number">
 
       <label for="song-url">Musiklink (valgfrit)</label>
-      <input id="song-url" placeholder="Spotify, YouTube eller Apple Music">
+      <input id="song-url">
 
       <button type="button" data-action="startSong">Start runde</button>
     </section>
@@ -661,7 +662,7 @@ function renderRound(me, isHost) {
       <p class="eyebrow">${escapeHtml(active && active.name)} har tur</p>
       <h2>🎵 Hitster-sang</h2>
       <p>Lyt til sangen og placér den på tidslinjen.</p>
-      ${game.currentSong.url
+      ${game.currentSong.source !== "hitster" && game.currentSong.url
         ? `<a class="button-link" href="${escapeHtml(game.currentSong.url)}" target="_blank" rel="noreferrer">Åbn musik</a>`
         : ""}
     </section>

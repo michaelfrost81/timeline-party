@@ -397,14 +397,21 @@ io.on("connection", (socket) => {
     reply(done, { ok: true });
   });
 
-  socket.on("song:start", ({ code, title, artist, year, url }, done) => {
+  socket.on("song:start", ({ code, title, artist, year, url, source }, done) => {
     const game = games.get(code);
     if (!game || game.hostId !== socket.data.playerId || !currentPlayer(socket, game) || game.currentSong) {
       return reply(done, { ok: false, message: "Kun værten kan starte en ny runde." });
     }
     const songYear = Number(year);
     if (!title || !artist || !Number.isInteger(songYear)) return reply(done, { ok: false, message: "Udfyld titel, kunstner og årstal." });
-    game.currentSong = { title, artist, year: songYear, url: url || `https://open.spotify.com/search/${encodeURIComponent(`${title} ${artist}`)}` };
+    const isHitster = source === "hitster";
+    game.currentSong = {
+      title,
+      artist,
+      year: songYear,
+      source: isHitster ? "hitster" : "manual",
+      url: isHitster ? "" : (url || `https://open.spotify.com/search/${encodeURIComponent(`${title} ${artist}`)}`)
+    };
     game.roundNumber += 1;
     game.showAnswer = false;
     game.roundPlayerId = game.activePlayerId;
