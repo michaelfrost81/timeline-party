@@ -8,8 +8,10 @@ const server = http.createServer(app);
 const io = new Server(server);
 const PORT = process.env.PORT || 10000;
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 24 * 60 * 60 * 1000;
+const OFFLINE_ACTION_TIMEOUT_MS = Number(process.env.OFFLINE_ACTION_TIMEOUT_MS) || 60 * 1000;
 const games = new Map();
 const cleanupTimers = new Map();
+const actionTimers = new Map();
 
 app.use(express.static(__dirname));
 app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "index.html")));
@@ -35,11 +37,15 @@ function publicGame(game) {
     challengeQueue: [...game.challengeQueue], challengeTurnIndex: game.challengeTurnIndex,
     challengeEligible: [...game.challengeEligible],
     challengeDecisions: { ...game.challengeDecisions },
+    offlineActionDeadlines: { ...game.offlineActionDeadlines },
     players: game.players.map(({ socketId, ...player }) => player)
   };
 }
 
-function sendGame(game) { io.to(game.code).emit("game:update", publicGame(game)); }
+function sendGame(game) {
+  syncOfflineActionTimers(game);
+  io.to(game.code).emit("game:update", publicGame(game));
+}
 function findPlayer(game, id) { return game.players.find((player) => player.id === id); }
 function reply(done, result) { if (typeof done === "function") done(result); }
 
@@ -53,6 +59,16 @@ function cancelCleanup(code) {
   const timer = cleanupTimers.get(code);
   if (timer) clearTimeout(timer);
   cleanupTimers.delete(code);
+}
+
+function clearGameActionTimers(game) {
+  for (const [key, timer] of actionTimers) {
+    if (key.startsWith(`${game.code}:`)) {
+      clearTimeout(timer);
+      actionTimers.delete(key);
+    }
+  }
+  game.offlineActionDeadlines = {};
 }
 
 function scheduleCleanup(game) {
@@ -87,6 +103,65 @@ function expectedResponder(game) {
   return null;
 }
 
+function actionTimerKey(game, playerId) {
+  return `${game.code}:${game.roundNumber}:${playerId}`;
+}
+
+function playersAwaitingAction(game) {
+  if (game.phase === "challenge_decisions") {
+    return game.challengeEligible.filter((id) => !game.challengeDecisions[id]);
+  }
+  const responder = expectedResponder(game);
+  return responder ? [responder] : [];
+}
+
+function clearActionTimer(game, playerId) {
+  const key = actionTimerKey(game, playerId);
+  const timer = actionTimers.get(key);
+  if (timer) clearTimeout(timer);
+  actionTimers.delete(key);
+  delete game.offlineActionDeadlines[playerId];
+}
+
+function handleOfflineActionTimeout(game, playerId) {
+  actionTimers.delete(actionTimerKey(game, playerId));
+  delete game.offlineActionDeadlines[playerId];
+  const player = findPlayer(game, playerId);
+  if (!games.has(game.code) || !player || !playersAwaitingAction(game).includes(playerId)) return;
+
+  if (game.phase === "challenge_decisions") {
+    game.challengeDecisions[playerId] = "pass";
+    finishChallengeDecisions(game);
+  } else {
+    player.ready = true;
+    player.lastGuessWasCorrect = false;
+    advanceGuessPhase(game);
+  }
+  sendGame(game);
+}
+
+function syncOfflineActionTimers(game) {
+  const awaiting = new Set(playersAwaitingAction(game));
+  Object.keys(game.offlineActionDeadlines).forEach((id) => {
+    if (!awaiting.has(id)) clearActionTimer(game, id);
+  });
+  awaiting.forEach((id) => {
+    const player = findPlayer(game, id);
+    if (!player || player.connected || game.offlineActionDeadlines[id]) return;
+    const deadline = Date.now() + OFFLINE_ACTION_TIMEOUT_MS;
+    game.offlineActionDeadlines[id] = deadline;
+    const timer = setTimeout(() => handleOfflineActionTimeout(game, id), OFFLINE_ACTION_TIMEOUT_MS);
+    timer.unref();
+    actionTimers.set(actionTimerKey(game, id), timer);
+  });
+}
+
+function answerIsOccupied(game, player, type, value) {
+  return game.players.some((other) => other.id !== player.id && other.ready && (
+    type === "decade" ? other.selectedDecade === value : other.selectedSlot === value
+  ));
+}
+
 function roundTimeline(game) {
   const roundPlayer = findPlayer(game, game.roundPlayerId);
   return roundPlayer ? roundPlayer.timeline : [];
@@ -104,7 +179,7 @@ function insertChronologically(timeline, year) {
 function advanceGuessPhase(game) {
   if (game.phase === "active_guess") {
     game.challengeEligible = game.players
-      .filter((player) => player.id !== game.roundPlayerId && player.connected)
+      .filter((player) => player.id !== game.roundPlayerId)
       .map((player) => player.id);
     game.challengeDecisions = {};
     game.phase = game.challengeEligible.length ? "challenge_decisions" : "awaiting_reveal";
@@ -136,11 +211,19 @@ function selectGuess(socket, details, done, type) {
       reply(done, { ok: false, message: "Vælg et gyldigt årti." });
       return;
     }
+    if (answerIsOccupied(game, player, type, decade)) {
+      reply(done, { ok: false, message: "Det årti er allerede optaget." });
+      return;
+    }
     player.selectedDecade = decade;
   } else {
     const slot = Number(details.slot);
     if (type !== "place" || !Number.isInteger(slot) || slot < 0 || slot > roundTimeline(game).length) {
       reply(done, { ok: false, message: "Vælg en gyldig plads på tidslinjen." });
+      return;
+    }
+    if (answerIsOccupied(game, player, type, slot)) {
+      reply(done, { ok: false, message: "Den placering er allerede optaget." });
       return;
     }
     player.selectedSlot = slot;
@@ -166,6 +249,7 @@ function lockGuess(socket, code, done) {
 }
 
 function resetGame(game) {
+  clearGameActionTimers(game);
   game.currentSong = null;
   game.showAnswer = false;
   game.activePlayerId = game.hostId;
@@ -177,6 +261,7 @@ function resetGame(game) {
   game.challengeTurnIndex = 0;
   game.challengeEligible = [];
   game.challengeDecisions = {};
+  game.offlineActionDeadlines = {};
   game.players.forEach((player) => {
     player.score = 0;
     player.timeline = [];
@@ -201,7 +286,8 @@ io.on("connection", (socket) => {
       activePlayerId: playerId, roundPlayerId: null, phase: "lobby",
       roundNumber: 0, lastAdvancedRound: null,
       challengeQueue: [], challengeTurnIndex: 0,
-      challengeEligible: [], challengeDecisions: {}, players: [player]
+      challengeEligible: [], challengeDecisions: {}, offlineActionDeadlines: {},
+      players: [player]
     };
     games.set(code, game);
     connectPlayer(socket, game, player);
@@ -249,6 +335,24 @@ io.on("connection", (socket) => {
     if (player.id === game.hostId) {
       return reply(done, { ok: false, message: "Værten skal afslutte spillet for alle." });
     }
+    const leavingIndex = game.players.findIndex((item) => item.id === player.id);
+    const nextPlayer = game.players[(leavingIndex + 1) % game.players.length];
+    clearActionTimer(game, player.id);
+    if (game.phase === "active_guess" && game.roundPlayerId === player.id) {
+      game.activePlayerId = nextPlayer.id;
+      game.phase = "awaiting_reveal";
+    } else if (game.phase === "challenge_decisions") {
+      game.challengeEligible = game.challengeEligible.filter((id) => id !== player.id);
+      delete game.challengeDecisions[player.id];
+      finishChallengeDecisions(game);
+    } else if (game.phase === "challenge_guesses") {
+      const queueIndex = game.challengeQueue.indexOf(player.id);
+      if (queueIndex >= 0) {
+        game.challengeQueue.splice(queueIndex, 1);
+        if (queueIndex < game.challengeTurnIndex) game.challengeTurnIndex -= 1;
+        if (game.challengeTurnIndex >= game.challengeQueue.length) game.phase = "awaiting_reveal";
+      }
+    }
     game.players = game.players.filter((item) => item.id !== player.id);
     socket.leave(game.code);
     delete socket.data.gameCode;
@@ -263,6 +367,7 @@ io.on("connection", (socket) => {
       return reply(done, { ok: false, message: "Kun værten kan afslutte spillet." });
     }
     io.to(game.code).emit("game:ended");
+    clearGameActionTimers(game);
     games.delete(game.code);
     cancelCleanup(game.code);
     reply(done, { ok: true });
@@ -284,6 +389,7 @@ io.on("connection", (socket) => {
     game.challengeTurnIndex = 0;
     game.challengeEligible = [];
     game.challengeDecisions = {};
+    game.offlineActionDeadlines = {};
     game.players.forEach((player) => {
       player.selectedSlot = null; player.selectedDecade = null;
       player.ready = false; player.lastGuessWasCorrect = null;
@@ -339,6 +445,7 @@ io.on("connection", (socket) => {
     const usesDecade = referenceTimeline.length === 0;
     participants.forEach((id) => {
       const player = findPlayer(game, id);
+      if (!player) return;
       const correct = usesDecade
         ? player.selectedDecade === Math.floor(game.currentSong.year / 10) * 10
         : placementIsCorrect(referenceTimeline, game.currentSong.year, player.selectedSlot);
@@ -348,9 +455,10 @@ io.on("connection", (socket) => {
         insertChronologically(player.timeline, game.currentSong.year);
       }
     });
-    findPlayer(game, game.roundPlayerId).turnsTaken += 1;
+    const roundPlayer = findPlayer(game, game.roundPlayerId);
+    if (roundPlayer) roundPlayer.turnsTaken += 1;
     const activeIndex = game.players.findIndex((player) => player.id === game.roundPlayerId);
-    game.activePlayerId = game.players[(activeIndex + 1) % game.players.length].id;
+    if (activeIndex >= 0) game.activePlayerId = game.players[(activeIndex + 1) % game.players.length].id;
     reply(done, { ok: true, game: publicGame(game) });
     sendGame(game);
   });
@@ -374,6 +482,7 @@ io.on("connection", (socket) => {
     game.currentSong = null; game.showAnswer = false; game.roundPlayerId = null; game.phase = "lobby";
     game.challengeQueue = []; game.challengeTurnIndex = 0;
     game.challengeEligible = []; game.challengeDecisions = {};
+    game.offlineActionDeadlines = {};
     game.players.forEach((player) => {
       player.selectedSlot = null; player.selectedDecade = null;
       player.ready = false; player.lastGuessWasCorrect = null;

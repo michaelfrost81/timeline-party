@@ -7,6 +7,7 @@ let activeGameCode = localStorage.getItem("timeline-party-game-code") || "";
 const myPlayerId = getOrCreatePlayerId();
 let isResuming = Boolean(activeGameCode);
 let nextSongPending = false;
+let viewedTimelinePlayerId = null;
 
 socket.on("connect", () => {
   if (activeGameCode) {
@@ -48,7 +49,9 @@ appRoot.addEventListener("click", (event) => {
     nextSong,
     restartGame,
     leaveGame,
-    endGame
+    endGame,
+    viewTimeline: () => viewTimeline(button.dataset.playerId),
+    closeTimeline
   };
 
   const action = actions[button.dataset.action];
@@ -203,6 +206,16 @@ function endGame() {
     if (result && result.ok) leaveGameView();
     else showServerMessage(result);
   });
+}
+
+function viewTimeline(playerId) {
+  viewedTimelinePlayerId = playerId;
+  render();
+}
+
+function closeTimeline() {
+  viewedTimelinePlayerId = null;
+  render();
 }
 
 function leaveGameView(message) {
@@ -421,13 +434,17 @@ function renderGuess(player, activePlayer) {
   if (player.ready) return '<div class="ready-message" role="status"><strong>Svaret er låst!</strong></div>';
   const referenceTimeline = activePlayer.timeline;
   const usesDecade = referenceTimeline.length === 0;
+  const occupiedAnswers = new Set(game.players
+    .filter((other) => other.id !== player.id && other.ready)
+    .map((other) => usesDecade ? other.selectedDecade : other.selectedSlot));
   if (!usesDecade) {
-    return `${renderTimeline(referenceTimeline, player)}<p class="hint">Placér sangen ud fra ${escapeHtml(activePlayer.name)}s tidslinje.</p><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedSlot) ? "" : "disabled"}>Lås svar</button>`;
+    return `${renderTimeline(referenceTimeline, player, occupiedAnswers)}<p class="hint">Placér sangen ud fra ${escapeHtml(activePlayer.name)}s tidslinje. Grå placeringer er optaget.</p><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedSlot) ? "" : "disabled"}>Lås svar</button>`;
   }
   const decades = [];
   for (let decade = 1950; decade <= 2020; decade += 10) {
     const selected = player.selectedDecade === decade;
-    decades.push(`<button type="button" class="decade ${selected ? "selected" : ""}" data-action="guessDecade" data-decade="${decade}">${decade}'erne${selected ? " ✓" : ""}</button>`);
+    const occupied = occupiedAnswers.has(decade);
+    decades.push(`<button type="button" class="decade ${selected ? "selected" : ""} ${occupied ? "occupied" : ""}" data-action="guessDecade" data-decade="${decade}" ${occupied ? "disabled" : ""}>${decade}'erne${selected ? " ✓" : occupied ? " · Optaget" : ""}</button>`);
   }
   return `<p class="hint">Den aktive spillers tidslinje er tom. Vælg hvilket årti sangen er fra.</p><div class="decades">${decades.join("")}</div><button type="button" data-action="lockAnswer" ${Number.isInteger(player.selectedDecade) ? "" : "disabled"}>Lås svar</button>`;
 }
@@ -437,15 +454,17 @@ function renderWaiting(me, responderId) {
   if (game.phase === "challenge_decisions") return '<p class="hint">Venter på de andre spilleres challenge-valg…</p>';
   const responder = game.players.find((player) => player.id === responderId);
   if (me.ready) return '<p class="ready-message">Dit svar er låst.</p>';
-  return `<p class="hint">Venter på ${escapeHtml(responder ? responder.name : "næste spiller")}…</p>`;
+  const offlineWait = responder && !responder.connected && game.offlineActionDeadlines && game.offlineActionDeadlines[responder.id];
+  return `<p class="hint">Venter på ${escapeHtml(responder ? responder.name : "næste spiller")}…${offlineWait ? " Spilleren er offline og har op til 60 sekunder til at vende tilbage." : ""}</p>`;
 }
 
-function renderTimeline(timeline, player) {
+function renderTimeline(timeline, player, occupiedAnswers) {
   const slots = [];
 
   for (let index = 0; index <= timeline.length; index += 1) {
     const isSelected = player.selectedSlot === index;
-    slots.push(`<button type="button" class="slot ${isSelected ? "selected" : ""}" data-action="placeSong" data-slot="${index}" ${player.ready ? "disabled" : ""}>${isSelected ? "Valgt ✓" : "Placér her"}</button>`);
+    const occupied = occupiedAnswers.has(index);
+    slots.push(`<button type="button" class="slot ${isSelected ? "selected" : ""} ${occupied ? "occupied" : ""}" data-action="placeSong" data-slot="${index}" ${player.ready || occupied ? "disabled" : ""}>${isSelected ? "Valgt ✓" : occupied ? "Optaget" : "Placér her"}</button>`);
 
     if (index < timeline.length) {
       slots.push(`<div class="year">${timeline[index]}</div>`);
@@ -457,6 +476,7 @@ function renderTimeline(timeline, player) {
 
 function renderAnswer(isHost) {
   const participants = new Set([game.roundPlayerId, ...game.challengeQueue]);
+  const viewedPlayer = game.players.find((player) => player.id === viewedTimelinePlayerId);
   return `
     <section class="card answer-card">
       <p class="eyebrow">Svar</p>
@@ -464,12 +484,27 @@ function renderAnswer(isHost) {
       <p>${escapeHtml(game.currentSong.artist)}</p>
       ${game.players.filter((player) => participants.has(player.id)).map((player) => `
         <div class="player-row">
-          <span>${player.lastGuessWasCorrect ? "✅" : "❌"} ${escapeHtml(player.name)}</span>
+          <button type="button" class="player-timeline-button" data-action="viewTimeline" data-player-id="${escapeHtml(player.id)}">${player.lastGuessWasCorrect ? "✅" : "❌"} ${escapeHtml(player.name)} · Se tidslinje</button>
           <span>${player.score} point</span>
         </div>
       `).join("")}
       ${isHost ? `<button type="button" data-action="nextSong" ${nextSongPending ? "disabled" : ""}>${nextSongPending ? "Går videre…" : "Næste sang"}</button>` : ""}
     </section>
+    ${viewedPlayer ? renderTimelineDialog(viewedPlayer) : ""}
+  `;
+}
+
+function renderTimelineDialog(player) {
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="timeline-dialog" role="dialog" aria-modal="true" aria-labelledby="timeline-dialog-title">
+        <h2 id="timeline-dialog-title">${escapeHtml(player.name)}s tidslinje</h2>
+        ${player.timeline.length
+          ? `<ol class="timeline-years">${player.timeline.map((year) => `<li>${year}</li>`).join("")}</ol>`
+          : '<p class="hint">Ingen sange endnu</p>'}
+        <button type="button" class="secondary" data-action="closeTimeline">Luk</button>
+      </section>
+    </div>
   `;
 }
 
