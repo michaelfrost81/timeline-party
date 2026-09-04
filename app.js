@@ -13,6 +13,24 @@ let qrScannerRaw = null;
 let qrScannerError = "";
 let qrScannerStream = null;
 let qrScannerFrame = null;
+let qrMatchedSong = null;
+
+// Første verificerede Hitster DK-kort.
+// Vi udvider listen, når flere kort er verificeret mod de fysiske kort.
+const HITSTER_DK_CARDS = {
+  "aaaa0047/00169": {
+    cardNumber: 169,
+    artist: "White Town",
+    title: "Your Woman",
+    year: 1997
+  },
+  "aaaa0047/00205": {
+    cardNumber: 205,
+    artist: "Bobby McFerrin",
+    title: "Don't Worry Be Happy",
+    year: 1988
+  }
+};
 
 socket.on("connect", () => {
   if (activeGameCode) {
@@ -59,7 +77,8 @@ appRoot.addEventListener("click", (event) => {
     closeTimeline,
     openQrScanner,
     closeQrScanner,
-    copyQrResult
+    copyQrResult,
+    useQrSong
   };
 
   const action = actions[button.dataset.action];
@@ -230,6 +249,7 @@ function openQrScanner() {
   qrScannerOpen = true;
   qrScannerRaw = null;
   qrScannerError = "";
+  qrMatchedSong = null;
   render();
   startQrCamera();
 }
@@ -248,14 +268,70 @@ function closeQrScanner() {
   qrScannerOpen = false;
   qrScannerRaw = null;
   qrScannerError = "";
+  qrMatchedSong = null;
   render();
 }
 
+function parseHitsterQr(rawData) {
+  const normalized = String(rawData || "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/\/+$/, "");
+
+  const match = normalized.match(/^hitstergame\.com\/dk\/([^/]+)\/(\d+)$/i);
+  if (!match) return null;
+
+  const setId = match[1].toLowerCase();
+  const cardId = match[2].padStart(5, "0");
+  const key = `${setId}/${cardId}`;
+  const song = HITSTER_DK_CARDS[key];
+
+  return {
+    key,
+    setId,
+    cardId,
+    song: song || null
+  };
+}
+
 function showQrResult(rawData) {
+  const value = String(rawData || "").trim();
+  if (!value) return;
+
   stopQrCamera();
-  qrScannerRaw = rawData;
+  qrScannerRaw = value;
   qrScannerError = "";
+
+  const parsed = parseHitsterQr(value);
+  qrMatchedSong = parsed && parsed.song ? parsed.song : null;
+
+  if (!parsed) {
+    qrScannerError = "QR-koden blev læst, men den ligner ikke et dansk Hitster-kort.";
+  } else if (!parsed.song) {
+    qrScannerError = `Hitster-kort ${Number(parsed.cardId)} er ikke i vores verificerede sangliste endnu.`;
+  }
+
   render();
+}
+
+function useQrSong() {
+  if (!qrMatchedSong || !game || game.currentSong) return;
+
+  const song = qrMatchedSong;
+  stopQrCamera();
+  qrScannerOpen = false;
+  qrScannerRaw = null;
+  qrScannerError = "";
+  qrMatchedSong = null;
+
+  socket.emit("song:start", {
+    code: game.code,
+    title: song.title,
+    artist: song.artist,
+    year: song.year,
+    url: ""
+  }, showServerMessage);
 }
 
 async function copyQrResult() {
@@ -438,7 +514,7 @@ function renderGameActions(isHost) {
   return `
     <section class="card game-actions">
       <h2>Spilmenu</h2>
-      ${isHost ? '<button type="button" class="secondary" data-action="openQrScanner">📷 Scan Hitster-kort</button>' : ""}
+      ${isHost && !game.currentSong ? '<button type="button" class="secondary" data-action="openQrScanner">📷 Scan Hitster-kort</button>' : ""}
       ${isHost ? '<button type="button" class="secondary" data-action="restartGame">Start forfra</button>' : ""}
       ${isHost
         ? '<button type="button" class="danger" data-action="endGame">Afslut spil</button>'
@@ -458,9 +534,16 @@ function renderQrScanner() {
           <p class="hint">Hold kortets QR-kode tydeligt foran kameraet.</p>
         ` : `
           <p class="qr-success"><strong>QR fundet ✓</strong></p>
-          <p>Rå QR-data:</p>
-          <pre class="qr-raw">${escapeHtml(qrScannerRaw)}</pre>
-          <button type="button" data-action="copyQrResult">Kopiér</button>
+          ${qrMatchedSong ? `
+            <p><strong>Kort ${qrMatchedSong.cardNumber} fundet.</strong></p>
+            <p class="hint">Sangoplysningerne er fundet og holdes skjult for spillerne indtil afsløring.</p>
+            <button type="button" data-action="useQrSong">Start runde med kortet</button>
+          ` : ""}
+          <details>
+            <summary>Vis rå QR-data</summary>
+            <pre class="qr-raw">${escapeHtml(qrScannerRaw)}</pre>
+            <button type="button" data-action="copyQrResult">Kopiér QR-data</button>
+          </details>
         `}
         ${qrScannerError ? `<p class="connection-warning" role="alert">${escapeHtml(qrScannerError)}</p>` : ""}
         <button type="button" class="secondary" data-action="closeQrScanner">Luk</button>
