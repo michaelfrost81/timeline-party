@@ -15,23 +15,6 @@ let qrScannerStream = null;
 let qrScannerFrame = null;
 let qrMatchedSong = null;
 
-// Første verificerede Hitster DK-kort.
-// Vi udvider listen, når flere kort er verificeret mod de fysiske kort.
-const HITSTER_DK_CARDS = {
-  "aaaa0047/00169": {
-    cardNumber: 169,
-    artist: "White Town",
-    title: "Your Woman",
-    year: 1997
-  },
-  "aaaa0047/00205": {
-    cardNumber: 205,
-    artist: "Bobby McFerrin",
-    title: "Don't Worry Be Happy",
-    year: 1988
-  }
-};
-
 socket.on("connect", () => {
   if (activeGameCode) {
     isResuming = true;
@@ -285,7 +268,10 @@ function parseHitsterQr(rawData) {
   const setId = match[1].toLowerCase();
   const cardId = match[2].padStart(5, "0");
   const key = `${setId}/${cardId}`;
-  const song = HITSTER_DK_CARDS[key];
+  const isKnownDanishSet = setId === globalThis.HITSTER_DK_SET_ID;
+  const song = isKnownDanishSet && globalThis.HITSTER_DK_CARDS
+    ? globalThis.HITSTER_DK_CARDS[cardId]
+    : null;
 
   return {
     key,
