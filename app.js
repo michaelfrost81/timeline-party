@@ -8,6 +8,11 @@ const myPlayerId = getOrCreatePlayerId();
 let isResuming = Boolean(activeGameCode);
 let nextSongPending = false;
 let viewedTimelinePlayerId = null;
+let qrScannerOpen = false;
+let qrScannerRaw = null;
+let qrScannerError = "";
+let qrScannerStream = null;
+let qrScannerFrame = null;
 
 socket.on("connect", () => {
   if (activeGameCode) {
@@ -51,7 +56,10 @@ appRoot.addEventListener("click", (event) => {
     leaveGame,
     endGame,
     viewTimeline: () => viewTimeline(button.dataset.playerId),
-    closeTimeline
+    closeTimeline,
+    openQrScanner,
+    closeQrScanner,
+    copyQrResult
   };
 
   const action = actions[button.dataset.action];
@@ -218,7 +226,138 @@ function closeTimeline() {
   render();
 }
 
+function openQrScanner() {
+  qrScannerOpen = true;
+  qrScannerRaw = null;
+  qrScannerError = "";
+  render();
+  startQrCamera();
+}
+
+function stopQrCamera() {
+  if (qrScannerFrame !== null && globalThis.cancelAnimationFrame) {
+    globalThis.cancelAnimationFrame(qrScannerFrame);
+  }
+  qrScannerFrame = null;
+  if (qrScannerStream) qrScannerStream.getTracks().forEach((track) => track.stop());
+  qrScannerStream = null;
+}
+
+function closeQrScanner() {
+  stopQrCamera();
+  qrScannerOpen = false;
+  qrScannerRaw = null;
+  qrScannerError = "";
+  render();
+}
+
+function showQrResult(rawData) {
+  stopQrCamera();
+  qrScannerRaw = rawData;
+  qrScannerError = "";
+  render();
+}
+
+async function copyQrResult() {
+  if (qrScannerRaw === null || !navigator.clipboard) return;
+  try {
+    await navigator.clipboard.writeText(qrScannerRaw);
+  } catch {
+    qrScannerError = "QR-data kunne ikke kopieres automatisk. Markér teksten og kopiér den manuelt.";
+    render();
+  }
+}
+
+function attachQrStream() {
+  const video = document.querySelector("#qr-video");
+  if (video && qrScannerStream && video.srcObject !== qrScannerStream) video.srcObject = qrScannerStream;
+  return video;
+}
+
+async function startQrCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    qrScannerError = "Denne browser understøtter ikke kameraadgang.";
+    render();
+    return;
+  }
+
+  let nativeDetector = null;
+  if (typeof globalThis.BarcodeDetector === "function") {
+    try {
+      nativeDetector = new globalThis.BarcodeDetector({ formats: ["qr_code"] });
+    } catch {
+      nativeDetector = null;
+    }
+  }
+
+  if (!nativeDetector && typeof globalThis.jsQR !== "function") {
+    qrScannerError = "QR-scanneren kunne ikke indlæses. Kontrollér internetforbindelsen og prøv igen.";
+    render();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: "environment" } }
+    });
+
+    if (!qrScannerOpen) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    qrScannerStream = stream;
+    const video = attachQrStream();
+    if (!video) throw new Error("QR video element mangler");
+    await video.play();
+    scanQrFrame(nativeDetector);
+  } catch (error) {
+    stopQrCamera();
+    qrScannerError = error && error.name === "NotAllowedError"
+      ? "Kameraadgang blev afvist. Tillad kameraet i browserens indstillinger og prøv igen."
+      : "Kameraet kunne ikke startes. Kontrollér, at det ikke bruges af en anden app.";
+    render();
+  }
+}
+
+async function scanQrFrame(nativeDetector) {
+  if (!qrScannerOpen || !qrScannerStream || qrScannerRaw !== null) return;
+
+  const video = attachQrStream();
+  if (video && video.readyState >= 2) {
+    try {
+      if (nativeDetector) {
+        const codes = await nativeDetector.detect(video);
+        if (codes.length) return showQrResult(codes[0].rawValue);
+      } else {
+        const canvas = document.querySelector("#qr-canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const image = context.getImageData(0, 0, canvas.width, canvas.height);
+        const code = globalThis.jsQR(
+          image.data,
+          image.width,
+          image.height,
+          { inversionAttempts: "dontInvert" }
+        );
+        if (code) return showQrResult(code.data);
+      }
+    } catch {
+      // En enkelt aflæsningsfejl må ikke stoppe den løbende scanner.
+    }
+  }
+
+  if (globalThis.requestAnimationFrame) {
+    qrScannerFrame = globalThis.requestAnimationFrame(() => scanQrFrame(nativeDetector));
+  }
+}
+
 function leaveGameView(message) {
+  stopQrCamera();
+  qrScannerOpen = false;
   clearActiveGame();
   game = null;
   isResuming = false;
@@ -281,18 +420,44 @@ function render() {
     ${!game.currentSong ? renderHostForm(isHost) : renderRound(me, isHost)}
 
     ${renderGameActions(isHost)}
+
+    ${qrScannerOpen && isHost ? renderQrScanner() : ""}
   `;
+  if (qrScannerOpen && isHost) attachQrStream();
 }
 
 function renderGameActions(isHost) {
   return `
     <section class="card game-actions">
       <h2>Spilmenu</h2>
+      ${isHost ? '<button type="button" class="secondary" data-action="openQrScanner">📷 Scan Hitster-kort</button>' : ""}
       ${isHost ? '<button type="button" class="secondary" data-action="restartGame">Start forfra</button>' : ""}
       ${isHost
         ? '<button type="button" class="danger" data-action="endGame">Afslut spil</button>'
         : '<button type="button" class="danger" data-action="leaveGame">Forlad spillet</button>'}
     </section>
+  `;
+}
+
+function renderQrScanner() {
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="timeline-dialog qr-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-dialog-title">
+        <h2 id="qr-dialog-title">Scan Hitster-kort</h2>
+        ${qrScannerRaw === null ? `
+          <video id="qr-video" class="qr-video" muted playsinline aria-label="Kameravisning til QR-scanning"></video>
+          <canvas id="qr-canvas" hidden></canvas>
+          <p class="hint">Hold kortets QR-kode tydeligt foran kameraet.</p>
+        ` : `
+          <p class="qr-success"><strong>QR fundet ✓</strong></p>
+          <p>Rå QR-data:</p>
+          <pre class="qr-raw">${escapeHtml(qrScannerRaw)}</pre>
+          <button type="button" data-action="copyQrResult">Kopiér</button>
+        `}
+        ${qrScannerError ? `<p class="connection-warning" role="alert">${escapeHtml(qrScannerError)}</p>` : ""}
+        <button type="button" class="secondary" data-action="closeQrScanner">Luk</button>
+      </section>
+    </div>
   `;
 }
 
