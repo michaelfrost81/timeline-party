@@ -329,8 +329,15 @@ async function scanQrFrame(nativeDetector) {
     try {
       if (nativeDetector) {
         const codes = await nativeDetector.detect(video);
-        if (codes.length) return showQrResult(codes[0].rawValue);
-      } else {
+        const rawValue = codes.length && typeof codes[0].rawValue === "string"
+          ? codes[0].rawValue.trim()
+          : "";
+        if (rawValue) return showQrResult(rawValue);
+        // Safari kan registrere en QR-kode uden at levere indholdet.
+        // I så fald prøver vi jsQR på samme videobillede nedenfor.
+      }
+
+      if (typeof globalThis.jsQR === "function") {
         const canvas = document.querySelector("#qr-canvas");
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -341,9 +348,10 @@ async function scanQrFrame(nativeDetector) {
           image.data,
           image.width,
           image.height,
-          { inversionAttempts: "dontInvert" }
+          { inversionAttempts: "attemptBoth" }
         );
-        if (code) return showQrResult(code.data);
+        const fallbackValue = code && typeof code.data === "string" ? code.data.trim() : "";
+        if (fallbackValue) return showQrResult(fallbackValue);
       }
     } catch {
       // En enkelt aflæsningsfejl må ikke stoppe den løbende scanner.
