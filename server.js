@@ -9,6 +9,7 @@ const io = new Server(server);
 const PORT = process.env.PORT || 10000;
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 24 * 60 * 60 * 1000;
 const OFFLINE_ACTION_TIMEOUT_MS = Number(process.env.OFFLINE_ACTION_TIMEOUT_MS) || 60 * 1000;
+const DECADE_OPTIONS = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
 const games = new Map();
 const cleanupTimers = new Map();
 const actionTimers = new Map();
@@ -162,6 +163,27 @@ function answerIsOccupied(game, player, type, value) {
   ));
 }
 
+function availableChallengeAnswerCount(game) {
+  const usesDecade = guessUsesDecade(game);
+  const occupied = new Set(game.players
+    .filter((player) => player.ready)
+    .map((player) => usesDecade ? player.selectedDecade : player.selectedSlot)
+    .filter(Number.isInteger));
+  const reserved = game.challengeQueue.filter((id) => {
+    const player = findPlayer(game, id);
+    return player && !player.ready;
+  }).length;
+  const optionCount = usesDecade ? DECADE_OPTIONS.length : roundTimeline(game).length + 1;
+  return Math.max(0, optionCount - occupied.size - reserved);
+}
+
+function passPlayersWhenNoChallengeAnswerRemains(game) {
+  if (game.phase !== "challenge_decisions" || availableChallengeAnswerCount(game) > 0) return;
+  game.challengeEligible.forEach((id) => {
+    if (!game.challengeDecisions[id]) game.challengeDecisions[id] = "pass";
+  });
+}
+
 function roundTimeline(game) {
   const roundPlayer = findPlayer(game, game.roundPlayerId);
   return roundPlayer ? roundPlayer.timeline : [];
@@ -184,6 +206,8 @@ function advanceGuessPhase(game) {
     game.challengeDecisions = {};
     game.phase = game.challengeEligible.length ? "challenge_decisions" : "awaiting_reveal";
     game.challengeTurnIndex = 0;
+    passPlayersWhenNoChallengeAnswerRemains(game);
+    finishChallengeDecisions(game);
   } else if (game.phase === "challenge_guesses") {
     game.challengeTurnIndex += 1;
     if (game.challengeTurnIndex >= game.challengeQueue.length) game.phase = "awaiting_reveal";
@@ -207,7 +231,7 @@ function selectGuess(socket, details, done, type) {
 
   if (guessUsesDecade(game)) {
     const decade = Number(details.decade);
-    if (type !== "decade" || !Number.isInteger(decade) || decade % 10 !== 0) {
+    if (type !== "decade" || !DECADE_OPTIONS.includes(decade)) {
       reply(done, { ok: false, message: "Vælg et gyldigt årti." });
       return;
     }
@@ -406,9 +430,18 @@ io.on("connection", (socket) => {
       return reply(done, { ok: false, message: "Der er lukket for challenges." });
     }
     if (game.challengeDecisions[player.id]) return reply(done, { ok: false, message: "Du har allerede valgt i denne runde." });
+    if (availableChallengeAnswerCount(game) <= 0) {
+      game.challengeDecisions[player.id] = "pass";
+      passPlayersWhenNoChallengeAnswerRemains(game);
+      finishChallengeDecisions(game);
+      reply(done, { ok: false, message: "Der er ingen ledige svarmuligheder. Du er automatisk registreret som Pas." });
+      sendGame(game);
+      return;
+    }
     player.challengesRemaining -= 1;
     game.challengeQueue.push(player.id);
     game.challengeDecisions[player.id] = "challenge";
+    passPlayersWhenNoChallengeAnswerRemains(game);
     finishChallengeDecisions(game);
     reply(done, { ok: true, game: publicGame(game) });
     sendGame(game);

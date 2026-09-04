@@ -418,12 +418,25 @@ function renderRound(me, isHost) {
 }
 
 function renderChallengeChoice(player) {
+  const activePlayer = game.players.find((item) => item.id === game.roundPlayerId);
+  const usesDecade = activePlayer.timeline.length === 0;
+  const occupied = new Set(game.players
+    .filter((item) => item.ready)
+    .map((item) => usesDecade ? item.selectedDecade : item.selectedSlot)
+    .filter(Number.isInteger));
+  const reserved = game.challengeQueue.filter((id) => {
+    const challenger = game.players.find((item) => item.id === id);
+    return challenger && !challenger.ready;
+  }).length;
+  const optionCount = usesDecade ? 8 : activePlayer.timeline.length + 1;
+  const hasAvailableAnswer = optionCount - occupied.size - reserved > 0;
   return `
     <div class="challenge-choice">
-      <p><strong>${game.players.find((item) => item.id === game.roundPlayerId).name}</strong> har låst sit svar. Vil du challenge?</p>
+      <p><strong>${activePlayer.name}</strong> har låst sit svar. Vil du challenge?</p>
       <p class="hint">Du har ${player.challengesRemaining}/5 challenges tilbage.</p>
+      ${hasAvailableAnswer ? "" : '<p class="hint">Alle svarmuligheder er optaget. Du registreres automatisk som Pas.</p>'}
       <div class="choice-actions">
-        <button type="button" class="challenge-button" data-action="challengeSong" ${player.challengesRemaining > 0 ? "" : "disabled"}>Challenge</button>
+        <button type="button" class="challenge-button" data-action="challengeSong" ${player.challengesRemaining > 0 && hasAvailableAnswer ? "" : "disabled"}>Challenge</button>
         <button type="button" class="secondary" data-action="passChallenge">Nej tak / Pas</button>
       </div>
     </div>

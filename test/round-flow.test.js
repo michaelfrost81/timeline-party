@@ -337,6 +337,66 @@ test("alle gætter mod aktiv tidslinje, men vindere får sangen kronologisk på 
   clients.forEach((client) => client.close());
 });
 
+test("sidste placering reserveres, og næste spiller auto-passer uden challenge-tab", async () => {
+  const { clients, code } = await setupPlayers(["host-capacity", "first-capacity", "last-capacity"]);
+
+  await start(clients, code, 2000);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 2000 });
+  await event(clients, 1, "song:pass", code);
+  await event(clients, 2, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 1980);
+  await selectAndLock(clients, 1, "song:decade", { code, decade: 1980 });
+  await event(clients, 0, "song:pass", code);
+  await event(clients, 2, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 1990);
+  await selectAndLock(clients, 2, "song:decade", { code, decade: 1990 });
+  await event(clients, 0, "song:pass", code);
+  await event(clients, 1, "song:pass", code);
+  await finishAndNext(clients, code);
+
+  await start(clients, code, 2000);
+  await selectAndLock(clients, 0, "song:place", { code, slot: 0 });
+  const reserved = await event(clients, 1, "song:challenge", code);
+  assert.equal(reserved.game.phase, "challenge_guesses");
+  assert.equal(reserved.game.challengeDecisions["last-capacity"], "pass");
+  assert.equal(reserved.game.players.find((player) => player.id === "last-capacity").challengesRemaining, 5);
+
+  const rejected = await clients[2].emitWithAck("song:challenge", code);
+  assert.equal(rejected.ok, false);
+  await selectAndLock(clients, 1, "song:place", { code, slot: 1 });
+  const revealed = await event(clients, 0, "song:reveal", code);
+  assert.equal(revealed.game.phase, "revealed");
+  clients.forEach((client) => client.close());
+});
+
+test("årti-runde reserverer de sidste svar og auto-passer overskydende challenger", async () => {
+  const ids = ["host-decades", ...Array.from({ length: 8 }, (_, index) => `decade-${index + 1}`)];
+  const { clients, code } = await setupPlayers(ids);
+  await start(clients, code, 1955);
+  await selectAndLock(clients, 0, "song:decade", { code, decade: 1950 });
+
+  let state;
+  for (let actor = 1; actor <= 7; actor += 1) {
+    state = await event(clients, actor, "song:challenge", code);
+  }
+  assert.equal(state.game.phase, "challenge_guesses");
+  assert.equal(state.game.challengeDecisions["decade-8"], "pass");
+  assert.equal(state.game.players.find((player) => player.id === "decade-8").challengesRemaining, 5);
+  const rejected = await clients[8].emitWithAck("song:challenge", code);
+  assert.equal(rejected.ok, false);
+
+  for (let actor = 1; actor <= 7; actor += 1) {
+    await selectAndLock(clients, actor, "song:decade", { code, decade: 1950 + actor * 10 });
+  }
+  const revealed = await event(clients, 0, "song:reveal", code);
+  assert.equal(revealed.game.phase, "revealed");
+  clients.forEach((client) => client.close());
+});
+
 test("challenge-beholdning har maksimum fem", async () => {
   const { clients, code } = await setupPlayers(["host-c", "challenger-c"]);
   for (let round = 0; round < 5; round += 1) {
