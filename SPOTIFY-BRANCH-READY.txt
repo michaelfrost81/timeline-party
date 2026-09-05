@@ -1,1 +1,0 @@
-Spotify playback integration is implemented on this branch and ready for manual testing before merge.
