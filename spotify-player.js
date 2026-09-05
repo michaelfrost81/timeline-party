@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const CLIENT_ID = "d350b7eda54a4ba4abc40f61d773608d";
-  const REDIRECT_URI = "https://timeline-party.onrender.com/callback";
+  const REDIRECT_URI = `${location.origin}/callback`;
   const TOKEN_KEY = "timeline-party-spotify-token";
   const VERIFIER_KEY = "timeline-party-spotify-verifier";
   const STATE_KEY = "timeline-party-spotify-state";
