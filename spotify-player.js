@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const CLIENT_ID = "d350b7eda54a4ba4abc40f61d773608d";
+  const CLIENT_ID = "412f73264b6b4c2c97ed07d67f64622b";
   const REDIRECT_URI = `${location.origin}/callback`;
   const TOKEN_KEY = "timeline-party-spotify-token";
   const VERIFIER_KEY = "timeline-party-spotify-verifier";
@@ -93,10 +93,7 @@
   function renderControls() {
     const menu = hostMenu(); if (!menu) return;
     let box = menu.querySelector("[data-spotify-controls]");
-    if (!box) {
-      box = document.createElement("div"); box.dataset.spotifyControls = "1";
-      const h = menu.querySelector("h2"); h.insertAdjacentElement("afterend", box);
-    }
+    if (!box) { box = document.createElement("div"); box.dataset.spotifyControls = "1"; const h = menu.querySelector("h2"); h.insertAdjacentElement("afterend", box); }
     const html = `<button type="button" class="secondary" data-spotify-connect>${getToken() ? "🟢 Spotify tilsluttet" : "🎧 Forbind Spotify"}</button>${status ? `<p class="hint">${status}</p>` : ""}`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
@@ -115,11 +112,7 @@
   }
 
   document.addEventListener("click", (event) => {
-    if (event.target.closest("[data-spotify-connect]")) {
-      event.preventDefault();
-      if (!getToken()) login(); else { if (player?.activateElement) try { player.activateElement(); } catch {} ensurePlayer().then(() => { status = "Spotify er klar"; renderControls(); }).catch((e) => { status = e.message; renderControls(); }); }
-      return;
-    }
+    if (event.target.closest("[data-spotify-connect]")) { event.preventDefault(); if (!getToken()) login(); else { if (player?.activateElement) try { player.activateElement(); } catch {} ensurePlayer().then(() => { status = "Spotify er klar"; renderControls(); }).catch((e) => { status = e.message; renderControls(); }); } return; }
     const start = event.target.closest('button[data-action="useQrSong"]'); if (!start) return;
     const song = songForRoundButton(start); if (!song) return;
     if (player?.activateElement) try { player.activateElement(); } catch {}
