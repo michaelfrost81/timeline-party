@@ -9,7 +9,7 @@ const io = new Server(server);
 const PORT = process.env.PORT || 10000;
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 24 * 60 * 60 * 1000;
 const OFFLINE_ACTION_TIMEOUT_MS = Number(process.env.OFFLINE_ACTION_TIMEOUT_MS) || 60 * 1000;
-const DECADE_OPTIONS = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
+const DECADE_OPTIONS = [1910, 1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
 const games = new Map();
 const cleanupTimers = new Map();
 const actionTimers = new Map();
@@ -498,8 +498,6 @@ io.on("connection", (socket) => {
     game.showAnswer = true;
     game.phase = "revealed";
     const participants = [game.roundPlayerId, ...game.challengeQueue];
-    // Every answer in the round is judged against the active player's timeline
-    // as it looked before any winner receives the song.
     const referenceTimeline = [...roundTimeline(game)];
     const usesDecade = referenceTimeline.length === 0;
     participants.forEach((id) => {
@@ -529,8 +527,6 @@ io.on("connection", (socket) => {
     if (!game || game.hostId !== socket.data.playerId || !currentPlayer(socket, game)) {
       return reply(done, { ok: false, message: "Kun værten kan gå videre til næste sang." });
     }
-    // A double tap or a delayed acknowledgement may repeat the same command.
-    // Treat it as successful instead of showing an incorrect not-revealed error.
     if (!game.currentSong && requestedRound === game.lastAdvancedRound) {
       return reply(done, { ok: true, game: publicGame(game) });
     }
