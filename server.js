@@ -50,7 +50,20 @@ function sendGame(game) {
 function findPlayer(game, id) { return game.players.find((player) => player.id === id); }
 function reply(done, result) { if (typeof done === "function") done(result); }
 
+function slotIsBetweenEqualYears(timeline, slot) {
+  return slot > 0 && slot < timeline.length && timeline[slot - 1] === timeline[slot];
+}
+
+function validPlacementSlots(timeline) {
+  const slots = [];
+  for (let slot = 0; slot <= timeline.length; slot += 1) {
+    if (!slotIsBetweenEqualYears(timeline, slot)) slots.push(slot);
+  }
+  return slots;
+}
+
 function placementIsCorrect(timeline, year, slot) {
+  if (slotIsBetweenEqualYears(timeline, slot)) return false;
   const left = slot === 0 ? -Infinity : timeline[slot - 1];
   const right = slot === timeline.length ? Infinity : timeline[slot];
   return left <= year && year <= right;
@@ -173,8 +186,9 @@ function availableChallengeAnswerCount(game) {
     const player = findPlayer(game, id);
     return player && !player.ready;
   }).length;
-  const optionCount = usesDecade ? DECADE_OPTIONS.length : roundTimeline(game).length + 1;
-  return Math.max(0, optionCount - occupied.size - reserved);
+  const options = usesDecade ? DECADE_OPTIONS : validPlacementSlots(roundTimeline(game));
+  const occupiedValidOptions = [...occupied].filter((value) => options.includes(value)).length;
+  return Math.max(0, options.length - occupiedValidOptions - reserved);
 }
 
 function passPlayersWhenNoChallengeAnswerRemains(game) {
@@ -241,9 +255,14 @@ function selectGuess(socket, details, done, type) {
     }
     player.selectedDecade = decade;
   } else {
+    const timeline = roundTimeline(game);
     const slot = Number(details.slot);
-    if (type !== "place" || !Number.isInteger(slot) || slot < 0 || slot > roundTimeline(game).length) {
+    if (type !== "place" || !Number.isInteger(slot) || slot < 0 || slot > timeline.length) {
       reply(done, { ok: false, message: "Vælg en gyldig plads på tidslinjen." });
+      return;
+    }
+    if (slotIsBetweenEqualYears(timeline, slot)) {
+      reply(done, { ok: false, message: "Du kan ikke placere en sang mellem to sange med samme årstal." });
       return;
     }
     if (answerIsOccupied(game, player, type, slot)) {
@@ -264,8 +283,8 @@ function lockGuess(socket, code, done) {
   }
   const hasAnswer = guessUsesDecade(game)
     ? Number.isInteger(player.selectedDecade)
-    : Number.isInteger(player.selectedSlot);
-  if (!hasAnswer) return reply(done, { ok: false, message: "Vælg et svar, før du låser." });
+    : Number.isInteger(player.selectedSlot) && !slotIsBetweenEqualYears(roundTimeline(game), player.selectedSlot);
+  if (!hasAnswer) return reply(done, { ok: false, message: "Vælg et gyldigt svar, før du låser." });
   player.ready = true;
   advanceGuessPhase(game);
   reply(done, { ok: true, game: publicGame(game) });
