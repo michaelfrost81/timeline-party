@@ -21,6 +21,7 @@
   let positionMs = 0;
   let durationMs = 0;
   let stateUpdatedAt = Date.now();
+  let currentTrackUri = "";
 
   const getToken = () => { try { return JSON.parse(localStorage.getItem(TOKEN_KEY) || "null"); } catch { return null; } };
   const saveToken = (data, old = null) => { const value = { access_token: data.access_token, refresh_token: data.refresh_token || old?.refresh_token || "", expires_at: Date.now() + (Math.max(60, Number(data.expires_in) || 3600) - 30) * 1000 }; localStorage.setItem(TOKEN_KEY, JSON.stringify(value)); return value; };
@@ -85,6 +86,8 @@
         player.addListener("not_ready", () => { deviceId = null; status = "Spotify-afspilleren er offline"; renderControls(); });
         player.addListener("player_state_changed", (state) => {
           if (!state) return;
+          const stateUri = state.track_window?.current_track?.uri || "";
+          if (currentTrackUri && stateUri && stateUri !== currentTrackUri) return;
           positionMs = Number(state.position) || 0;
           durationMs = Number(state.duration) || 0;
           isPaused = Boolean(state.paused);
@@ -112,9 +115,15 @@
   }
   async function startExactTrack(track, manual = false) {
     const id = await ensurePlayer();
+    currentTrackUri = track.uri;
+    positionMs = 0;
+    durationMs = Number(track.duration_ms) || 0;
+    isPaused = true;
+    stateUpdatedAt = Date.now();
     if (player?.activateElement) { try { await player.activateElement(); } catch {} }
     if (!manual) await api("/me/player", { method: "PUT", body: JSON.stringify({ device_ids: [id], play: false }) }, true, "Overførsel til Timeline Party-afspilleren");
-    await api(`/me/player/play?device_id=${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ uris: [track.uri] }) }, true, "Start af sangen");
+    await api(`/me/player/play?device_id=${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ uris: [track.uri], position_ms: 0 }) }, true, "Start af sangen");
+    try { await player.seek(0); } catch {}
     needsManualPlay = false;
     roundPlaybackActive = true;
     isPaused = false;
@@ -132,7 +141,12 @@
     pendingTrack = null;
     needsManualPlay = false;
     roundPlaybackActive = false;
-    if (player?.activateElement) { try { await player.activateElement(); } catch {} }
+    currentTrackUri = "";
+    positionMs = 0;
+    durationMs = 0;
+    isPaused = true;
+    stateUpdatedAt = Date.now();
+    if (player?.activateElement) { try { player.activateElement(); } catch {} }
     await ensurePlayer();
     status = "Spotify: finder sangen…"; renderControls();
     pendingTrack = await findTrack(pendingSong);
