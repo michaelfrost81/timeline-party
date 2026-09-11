@@ -6,234 +6,29 @@
   const YEAR_OVERRIDES_KEY = "timeline-party-hitster-year-overrides";
   const defaults = { winMode: "firstTo", targetScore: 10, roundLimit: 15, maxChallenges: 5, challengesEnabled: true, answerTimer: 0 };
   let settings = { ...defaults, ...read(SETTINGS_KEY, {}) };
-  let gameState = null;
-  let socketRef = null;
-  let settingsOpen = false;
-  let statsOpen = false;
-  let correctionsOpen = false;
-  let renderQueued = false;
-  let clock = null;
-  let recordedRounds = new Set();
-  let recordedFinishedGames = new Set();
-
-  function read(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }
-  function save(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
-  function esc(value) { return String(value ?? "").replace(/[&<>\"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
-  function myPlayerId() { return localStorage.getItem("timeline-party-player-id") || ""; }
-  function isHost() { return Boolean(gameState && gameState.hostId === myPlayerId()); }
-  function history() { return read(HISTORY_KEY, { rounds: [], games: [] }); }
-  function overrides() { return read(YEAR_OVERRIDES_KEY, {}); }
-
-  function settingsPayload(source = settings) {
-    return {
-      winMode: source.winMode,
-      targetScore: Number(source.targetScore),
-      roundLimit: Number(source.roundLimit),
-      maxChallenges: Number(source.maxChallenges),
-      challengesEnabled: Boolean(source.challengesEnabled),
-      answerTimer: Number(source.answerTimer)
-    };
-  }
-
-  function recordGame(next) {
-    if (!next) return;
-    const data = history();
-    if (next.showAnswer) {
-      const roundKey = `${next.code}:${next.roundNumber}`;
-      if (!recordedRounds.has(roundKey) && !data.rounds.some((row) => row.key === roundKey)) {
-        recordedRounds.add(roundKey);
-        data.rounds.unshift({
-          key: roundKey,
-          at: Date.now(),
-          round: next.roundNumber,
-          year: next.currentSong?.year ?? null,
-          players: next.players.map((player) => ({ name: player.name, correct: player.lastGuessWasCorrect === true, score: player.score }))
-        });
-        data.rounds = data.rounds.slice(0, 500);
-        save(HISTORY_KEY, data);
-      }
-    }
-    if (next.finished) {
-      const gameKey = `${next.code}:finished:${next.roundNumber}`;
-      if (!recordedFinishedGames.has(gameKey) && !data.games.some((row) => row.key === gameKey)) {
-        recordedFinishedGames.add(gameKey);
-        const winnerIds = new Set(next.winnerIds || []);
-        data.games.unshift({
-          key: gameKey,
-          at: Date.now(),
-          rounds: next.roundNumber,
-          players: next.players.map((player) => ({ name: player.name, score: player.score, winner: winnerIds.has(player.id) }))
-        });
-        data.games = data.games.slice(0, 100);
-        save(HISTORY_KEY, data);
-      }
-    }
-  }
-
-  const originalIo = globalThis.io;
-  if (typeof originalIo === "function") {
-    globalThis.io = function (...args) {
-      const socket = originalIo(...args);
-      socketRef = socket;
-      socket.on("game:update", (next) => {
-        gameState = next;
-        if (next?.settings) {
-          settings = { ...settings, ...next.settings };
-          save(SETTINGS_KEY, settings);
-        }
-        recordGame(next);
-        queueDecorate();
-      });
-      socket.on("game:ended", () => { gameState = null; queueDecorate(); });
-      const originalEmit = socket.emit.bind(socket);
-      socket.emit = function (event, ...emitArgs) {
-        if (event === "game:create" && emitArgs[0] && typeof emitArgs[0] === "object") {
-          emitArgs[0] = { ...emitArgs[0], settings: settingsPayload() };
-        }
-        return originalEmit(event, ...emitArgs);
-      };
-      return socket;
-    };
-    Object.assign(globalThis.io, originalIo);
-  }
-
-  function queueDecorate() {
-    if (renderQueued) return;
-    renderQueued = true;
-    requestAnimationFrame(() => { renderQueued = false; decorate(); });
-  }
-
-  function winnerNames() {
-    if (!gameState) return [];
-    const ids = new Set(gameState.winnerIds || []);
-    return gameState.players.filter((player) => ids.has(player.id)).map((player) => player.name);
-  }
-
-  function phaseText() {
-    if (!gameState) return "";
-    if (gameState.finished) return "🏆 Spillet er afsluttet";
-    if (!gameState.currentSong) {
-      const max = Math.max(0, ...gameState.players.map((player) => player.score));
-      const leaders = gameState.players.filter((player) => player.score === max).map((player) => player.name);
-      return leaders.length ? `🎮 ${leaders.join(" & ")} fører med ${max} point` : "🎮 Klar til næste runde";
-    }
-    const active = gameState.players.find((player) => player.id === (gameState.roundPlayerId || gameState.activePlayerId));
-    if (gameState.phase === "challenge_decisions") return `⚡ Challenge-valg · Runde ${gameState.roundNumber}`;
-    if (gameState.phase === "challenge_guesses") return `⚡ Challenge-svar · Runde ${gameState.roundNumber}`;
-    if (gameState.phase === "awaiting_reveal") return `👀 Klar til at afsløre svaret · Runde ${gameState.roundNumber}`;
-    if (gameState.showAnswer) return `🎵 Svaret er afsløret · Runde ${gameState.roundNumber}`;
-    return `🎯 Runde ${gameState.roundNumber}${active ? ` · ${active.name}s tur` : ""}`;
-  }
-
-  function addStatus() {
-    const hero = document.querySelector(".hero-card");
-    if (!hero || !gameState) return;
-    let status = hero.querySelector(".enhance-status");
-    if (!status) { status = document.createElement("p"); status.className = "enhance-status"; hero.appendChild(status); }
-    status.textContent = phaseText();
-  }
-
-  function addRevealCelebration() {
-    document.querySelectorAll(".round-celebration").forEach((node) => node.remove());
-    if (!gameState?.showAnswer || gameState.finished) return;
-    const target = document.querySelector(".round-card") || document.querySelector(".hero-card");
-    if (!target) return;
-    const names = gameState.players.filter((player) => player.lastGuessWasCorrect).map((player) => player.name);
-    const box = document.createElement("div"); box.className = "round-celebration";
-    box.innerHTML = names.length
-      ? `<strong>🎉 Korrekt svar!</strong><span>${esc(names.join(", "))}</span>`
-      : `<strong>🎵 Svaret er afsløret</strong><span>Ingen ramte denne gang.</span>`;
-    target.prepend(box);
-  }
-
-  function addFinishBanner() {
-    document.querySelectorAll(".game-finish-banner").forEach((node) => node.remove());
-    if (!gameState?.finished) return;
-    const hero = document.querySelector(".hero-card"); if (!hero) return;
-    const max = Math.max(0, ...gameState.players.map((player) => player.score));
-    const banner = document.createElement("section"); banner.className = "card game-finish-banner";
-    banner.innerHTML = `<p class="eyebrow">Spillet er slut</p><h2>🏆 ${esc(winnerNames().join(" & ") || "Vinder")}</h2><p>${max} point · ${gameState.roundNumber} runder</p>`;
-    hero.after(banner);
-  }
-
-  function addTools() {
-    if (!isHost()) return;
-    const actions = document.querySelector(".game-actions") || [...document.querySelectorAll("#app > section")].at(-1);
-    if (!actions || actions.querySelector(".enhance-tools")) return;
-    const wrap = document.createElement("div"); wrap.className = "enhance-tools";
-    wrap.innerHTML = `<button type="button" data-enhance="settings">⚙️ Spilindstillinger</button><button type="button" data-enhance="corrections">🃏 Kortrettelser</button><button type="button" data-enhance="stats">📊 Statistik</button>${gameState && !gameState.finished ? '<button type="button" data-enhance="finish">🏁 Afslut spil og vis vinder</button>' : ""}`;
-    actions.appendChild(wrap);
-  }
-
-  function renderPanels() {
-    document.querySelectorAll(".enhance-panel").forEach((node) => node.remove());
-    const root = document.querySelector("#app"); if (!root || !gameState) return;
-    if (settingsOpen) {
-      const locked = Boolean(gameState.currentSong);
-      root.insertAdjacentHTML("beforeend", `<section class="card enhance-panel"><h2>⚙️ Spilindstillinger</h2>${locked ? '<p class="connection-warning">Indstillinger kan ændres mellem runderne.</p>' : ""}<label>Spiltype<select id="enh-win" ${locked?'disabled':''}><option value="firstTo" ${settings.winMode==='firstTo'?'selected':''}>Først til point</option><option value="rounds" ${settings.winMode==='rounds'?'selected':''}>Fast antal runder</option><option value="host" ${settings.winMode==='host'?'selected':''}>Værten afslutter</option></select></label><label>Point for sejr<input id="enh-score" type="number" min="1" max="50" value="${settings.targetScore}" ${locked?'disabled':''}></label><label>Antal runder<input id="enh-rounds" type="number" min="1" max="100" value="${settings.roundLimit}" ${locked?'disabled':''}></label><label>Challenges pr. spiller<input id="enh-challenges" type="number" min="0" max="20" value="${settings.maxChallenges}" ${locked?'disabled':''}></label><label><input id="enh-challenges-on" type="checkbox" ${settings.challengesEnabled?'checked':''} ${locked?'disabled':''}> Challenges slået til</label><label>Svar-timer i sekunder (0 = fra)<input id="enh-timer" type="number" min="0" max="120" value="${settings.answerTimer}" ${locked?'disabled':''}></label>${locked?'':'<button data-enhance="save-settings">Gem indstillinger</button>'}<button data-enhance="close">Luk</button></section>`);
-    }
-    if (statsOpen) {
-      const data = history(); const totals = {};
-      data.rounds.forEach((round) => round.players.forEach((player) => { totals[player.name] ??= { rounds:0, correct:0, wins:0 }; totals[player.name].rounds += 1; if (player.correct) totals[player.name].correct += 1; }));
-      data.games.forEach((savedGame) => savedGame.players.forEach((player) => { totals[player.name] ??= { rounds:0, correct:0, wins:0 }; if (player.winner) totals[player.name].wins += 1; }));
-      root.insertAdjacentHTML("beforeend", `<section class="card enhance-panel"><h2>📊 Spilhistorik og statistik</h2>${Object.keys(totals).length ? Object.entries(totals).map(([name, row]) => `<div class="stat-row"><strong>${esc(name)}</strong><span>${row.correct}/${row.rounds} korrekte${row.rounds ? ` · ${Math.round(row.correct/row.rounds*100)}%` : ""} · ${row.wins} sejre</span></div>`).join("") : '<p>Ingen afsluttede runder gemt endnu.</p>'}<p>${data.games.length} afsluttede spil · ${data.rounds.length} gemte runder</p><button data-enhance="clear-stats">Nulstil statistik</button><button data-enhance="close">Luk</button></section>`);
-    }
-    if (correctionsOpen) {
-      const rows = Object.entries(overrides()).sort((a,b) => Number(a[0]) - Number(b[0]));
-      root.insertAdjacentHTML("beforeend", `<section class="card enhance-panel"><h2>🃏 Rettede Hitster-kort</h2>${rows.length ? rows.map(([id, year]) => `<div class="stat-row"><span>Kort ${Number(id)} → <strong>${year}</strong></span><button data-enhance="delete-correction" data-card="${id}">Slet</button></div>`).join("") : '<p>Ingen lokale rettelser endnu.</p>'}<p class="hint">Her vises de årstal, du har rettet via Spotify-funktionen “Ret årstal”.</p><button data-enhance="close">Luk</button></section>`);
-    }
-  }
-
-  function updateCountdown() {
-    document.querySelectorAll(".answer-countdown").forEach((node) => node.remove());
-    if (!gameState?.currentSong || gameState.showAnswer || gameState.finished) return;
-    const me = myPlayerId();
-    const deadline = Number(gameState.offlineActionDeadlines?.[me]);
-    if (!deadline) return;
-    const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    const target = document.querySelector(".round-card") || document.querySelector(".hero-card");
-    if (!target) return;
-    const el = document.createElement("p"); el.className = "answer-countdown"; el.textContent = `⏱ ${left} sek. tilbage`;
-    target.prepend(el);
-  }
-
-  function decorate() {
-    if (!gameState) return;
-    addStatus(); addRevealCelebration(); addFinishBanner(); addTools(); renderPanels(); updateCountdown();
-    if (!clock) clock = setInterval(updateCountdown, 500);
-  }
-
-  document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-enhance]"); if (!button) return;
-    event.preventDefault(); event.stopPropagation();
-    const action = button.dataset.enhance;
-    if (action === "settings") settingsOpen = !settingsOpen;
-    if (action === "stats") statsOpen = !statsOpen;
-    if (action === "corrections") correctionsOpen = !correctionsOpen;
-    if (action === "close") settingsOpen = statsOpen = correctionsOpen = false;
-    if (action === "finish") {
-      if (confirm("Afslut spillet og vis vinderen?")) socketRef?.emit("game:finish", gameState.code, (result) => { if (!result?.ok) alert(result?.message || "Spillet kunne ikke afsluttes."); });
-    }
-    if (action === "save-settings") {
-      const next = {
-        winMode: document.querySelector("#enh-win").value,
-        targetScore: Number(document.querySelector("#enh-score").value),
-        roundLimit: Number(document.querySelector("#enh-rounds").value),
-        maxChallenges: Number(document.querySelector("#enh-challenges").value),
-        challengesEnabled: document.querySelector("#enh-challenges-on").checked,
-        answerTimer: Number(document.querySelector("#enh-timer").value)
-      };
-      socketRef?.emit("game:settings", { code: gameState.code, settings: next }, (result) => {
-        if (!result?.ok) return alert(result?.message || "Indstillingerne kunne ikke gemmes.");
-        settings = { ...settings, ...(result.game?.settings || next) }; save(SETTINGS_KEY, settings); settingsOpen = false; queueDecorate();
-      });
-    }
-    if (action === "clear-stats" && confirm("Nulstil gemt statistik på denne enhed?")) save(HISTORY_KEY, { rounds: [], games: [] });
-    if (action === "delete-correction") {
-      const data = overrides(); delete data[button.dataset.card]; save(YEAR_OVERRIDES_KEY, data); location.reload(); return;
-    }
-    queueDecorate();
-  }, true);
-
-  new MutationObserver(queueDecorate).observe(document.documentElement, { childList: true, subtree: true });
+  let gameState = null, socketRef = null, settingsOpen = false, statsOpen = false, correctionsOpen = false, renderQueued = false, clock = null;
+  const recordedRounds = new Set(), recordedFinishedGames = new Set();
+  function read(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}}
+  function save(k,v){localStorage.setItem(k,JSON.stringify(v))}
+  function esc(v){return String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+  function myPlayerId(){return localStorage.getItem("timeline-party-player-id")||""}
+  function isHost(){return Boolean(gameState&&gameState.hostId===myPlayerId())}
+  function history(){return read(HISTORY_KEY,{rounds:[],games:[]})}
+  function overrides(){return read(YEAR_OVERRIDES_KEY,{})}
+  function settingsPayload(s=settings){return{winMode:s.winMode,targetScore:Number(s.targetScore),roundLimit:Number(s.roundLimit),maxChallenges:Number(s.maxChallenges),challengesEnabled:Boolean(s.challengesEnabled),answerTimer:Number(s.answerTimer)}}
+  function recordGame(next){if(!next)return;const d=history();if(next.showAnswer){const k=`${next.code}:${next.roundNumber}`;if(!recordedRounds.has(k)&&!d.rounds.some(r=>r.key===k)){recordedRounds.add(k);d.rounds.unshift({key:k,at:Date.now(),round:next.roundNumber,year:next.currentSong?.year??null,players:next.players.map(p=>({name:p.name,correct:p.lastGuessWasCorrect===true,score:p.score}))});d.rounds=d.rounds.slice(0,500);save(HISTORY_KEY,d)}}if(next.finished){const k=`${next.code}:finished:${next.roundNumber}`;if(!recordedFinishedGames.has(k)&&!d.games.some(r=>r.key===k)){recordedFinishedGames.add(k);const w=new Set(next.winnerIds||[]);d.games.unshift({key:k,at:Date.now(),rounds:next.roundNumber,players:next.players.map(p=>({name:p.name,score:p.score,winner:w.has(p.id)}))});d.games=d.games.slice(0,100);save(HISTORY_KEY,d)}}}
+  const originalIo=globalThis.io;if(typeof originalIo==="function"){globalThis.io=function(...args){const s=originalIo(...args);socketRef=s;s.on("game:update",next=>{gameState=next;if(next?.settings){settings={...settings,...next.settings};save(SETTINGS_KEY,settings)}recordGame(next);queueDecorate()});s.on("game:ended",()=>{gameState=null;queueDecorate()});const emit=s.emit.bind(s);s.emit=function(event,...a){if(event==="game:create"&&a[0]&&typeof a[0]==="object")a[0]={...a[0],settings:settingsPayload()};return emit(event,...a)};return s};Object.assign(globalThis.io,originalIo)}
+  function queueDecorate(){if(renderQueued)return;renderQueued=true;requestAnimationFrame(()=>{renderQueued=false;decorate()})}
+  function winnerNames(){if(!gameState)return[];const ids=new Set(gameState.winnerIds||[]);return gameState.players.filter(p=>ids.has(p.id)).map(p=>p.name)}
+  function phaseText(){if(!gameState)return"";if(gameState.finished)return"🏆 Spillet er afsluttet";if(!gameState.currentSong){const m=Math.max(0,...gameState.players.map(p=>p.score)),l=gameState.players.filter(p=>p.score===m).map(p=>p.name);return l.length?`🎮 ${l.join(" & ")} fører med ${m} point`:"🎮 Klar til næste runde"}const a=gameState.players.find(p=>p.id===(gameState.roundPlayerId||gameState.activePlayerId));if(gameState.phase==="challenge_decisions")return`⚡ Challenge-valg · Runde ${gameState.roundNumber}`;if(gameState.phase==="challenge_guesses")return`⚡ Challenge-svar · Runde ${gameState.roundNumber}`;if(gameState.phase==="awaiting_reveal")return`👀 Klar til at afsløre svaret · Runde ${gameState.roundNumber}`;if(gameState.showAnswer)return`🎵 Svaret er afsløret · Runde ${gameState.roundNumber}`;return`🎯 Runde ${gameState.roundNumber}${a?` · ${a.name}s tur`:""}`}
+  function addStatus(){const h=document.querySelector(".hero-card");if(!h||!gameState)return;let s=h.querySelector(".enhance-status");if(!s){s=document.createElement("p");s.className="enhance-status";h.appendChild(s)}s.textContent=phaseText()}
+  function addRevealCelebration(){if(document.querySelector(".round-celebration")||!gameState?.showAnswer||gameState.finished)return;const t=document.querySelector(".round-card")||document.querySelector(".hero-card");if(!t)return;const n=gameState.players.filter(p=>p.lastGuessWasCorrect).map(p=>p.name),b=document.createElement("div");b.className="round-celebration";b.innerHTML=n.length?`<strong>🎉 Korrekt svar!</strong><span>${esc(n.join(", "))}</span>`:`<strong>🎵 Svaret er afsløret</strong><span>Ingen ramte denne gang.</span>`;t.prepend(b)}
+  function addFinishBanner(){if(document.querySelector(".game-finish-banner")||!gameState?.finished)return;const h=document.querySelector(".hero-card");if(!h)return;const m=Math.max(0,...gameState.players.map(p=>p.score)),b=document.createElement("section");b.className="card game-finish-banner";b.innerHTML=`<p class="eyebrow">Spillet er slut</p><h2>🏆 ${esc(winnerNames().join(" & ")||"Vinder")}</h2><p>${m} point · ${gameState.roundNumber} runder</p>`;h.after(b)}
+  function addTools(){if(!isHost())return;const a=document.querySelector(".game-actions")||[...document.querySelectorAll("#app > section")].at(-1);if(!a||a.querySelector(".enhance-tools"))return;const w=document.createElement("div");w.className="enhance-tools";w.innerHTML=`<button type="button" data-enhance="settings">⚙️ Spilindstillinger</button><button type="button" data-enhance="corrections">🃏 Kortrettelser</button><button type="button" data-enhance="stats">📊 Statistik</button>${gameState&&!gameState.finished?'<button type="button" data-enhance="finish">🏁 Afslut spil og vis vinder</button>':""}`;a.appendChild(w)}
+  function renderPanels(){const root=document.querySelector("#app");if(!root||!gameState)return;if(settingsOpen&&!document.querySelector('.enhance-panel[data-panel="settings"]')){const l=Boolean(gameState.currentSong);root.insertAdjacentHTML("beforeend",`<section class="card enhance-panel" data-panel="settings"><h2>⚙️ Spilindstillinger</h2>${l?'<p class="connection-warning">Indstillinger kan ændres mellem runderne.</p>':""}<label>Spiltype<select id="enh-win" ${l?'disabled':''}><option value="firstTo" ${settings.winMode==='firstTo'?'selected':''}>Først til point</option><option value="rounds" ${settings.winMode==='rounds'?'selected':''}>Fast antal runder</option><option value="host" ${settings.winMode==='host'?'selected':''}>Værten afslutter</option></select></label><label>Point for sejr<input id="enh-score" type="number" min="1" max="50" value="${settings.targetScore}" ${l?'disabled':''}></label><label>Antal runder<input id="enh-rounds" type="number" min="1" max="100" value="${settings.roundLimit}" ${l?'disabled':''}></label><label>Challenges pr. spiller<input id="enh-challenges" type="number" min="0" max="20" value="${settings.maxChallenges}" ${l?'disabled':''}></label><label><input id="enh-challenges-on" type="checkbox" ${settings.challengesEnabled?'checked':''} ${l?'disabled':''}> Challenges slået til</label><label>Svar-timer i sekunder (0 = fra)<input id="enh-timer" type="number" min="0" max="120" value="${settings.answerTimer}" ${l?'disabled':''}></label>${l?'':'<button data-enhance="save-settings">Gem indstillinger</button>'}<button data-enhance="close">Luk</button></section>`)}if(statsOpen&&!document.querySelector('.enhance-panel[data-panel="stats"]')){const d=history(),tot={};d.rounds.forEach(r=>r.players.forEach(p=>{tot[p.name]??={rounds:0,correct:0,wins:0};tot[p.name].rounds++;if(p.correct)tot[p.name].correct++}));d.games.forEach(g=>g.players.forEach(p=>{tot[p.name]??={rounds:0,correct:0,wins:0};if(p.winner)tot[p.name].wins++}));root.insertAdjacentHTML("beforeend",`<section class="card enhance-panel" data-panel="stats"><h2>📊 Spilhistorik og statistik</h2>${Object.keys(tot).length?Object.entries(tot).map(([n,r])=>`<div class="stat-row"><strong>${esc(n)}</strong><span>${r.correct}/${r.rounds} korrekte${r.rounds?` · ${Math.round(r.correct/r.rounds*100)}%`:""} · ${r.wins} sejre</span></div>`).join(""):'<p>Ingen afsluttede runder gemt endnu.</p>'}<p>${d.games.length} afsluttede spil · ${d.rounds.length} gemte runder</p><button data-enhance="clear-stats">Nulstil statistik</button><button data-enhance="close">Luk</button></section>`)}if(correctionsOpen&&!document.querySelector('.enhance-panel[data-panel="corrections"]')){const rows=Object.entries(overrides()).sort((a,b)=>Number(a[0])-Number(b[0]));root.insertAdjacentHTML("beforeend",`<section class="card enhance-panel" data-panel="corrections"><h2>🃏 Rettede Hitster-kort</h2>${rows.length?rows.map(([id,y])=>`<div class="stat-row"><span>Kort ${Number(id)} → <strong>${y}</strong></span><button data-enhance="delete-correction" data-card="${id}">Slet</button></div>`).join(""):'<p>Ingen lokale rettelser endnu.</p>'}<p class="hint">Her vises de årstal, du har rettet via Spotify-funktionen “Ret årstal”.</p><button data-enhance="close">Luk</button></section>`)}}
+  function updateCountdown(){const old=document.querySelector(".answer-countdown");if(!gameState?.currentSong||gameState.showAnswer||gameState.finished){old?.remove();return}const d=Number(gameState.offlineActionDeadlines?.[myPlayerId()]);if(!d){old?.remove();return}const left=Math.max(0,Math.ceil((d-Date.now())/1000)),t=document.querySelector(".round-card")||document.querySelector(".hero-card");if(!t)return;let e=old;if(!e){e=document.createElement("p");e.className="answer-countdown";t.prepend(e)}e.textContent=`⏱ ${left} sek. tilbage`}
+  function decorate(){if(!gameState)return;addStatus();addRevealCelebration();addFinishBanner();addTools();renderPanels();updateCountdown();if(!clock)clock=setInterval(updateCountdown,500)}
+  function closePanels(){settingsOpen=statsOpen=correctionsOpen=false;document.querySelectorAll(".enhance-panel").forEach(n=>n.remove())}
+  document.addEventListener("click",event=>{const b=event.target.closest("[data-enhance]");if(!b)return;event.preventDefault();event.stopPropagation();const a=b.dataset.enhance;if(a==="settings"){closePanels();settingsOpen=true}if(a==="stats"){closePanels();statsOpen=true}if(a==="corrections"){closePanels();correctionsOpen=true}if(a==="close")closePanels();if(a==="finish"&&confirm("Afslut spillet og vis vinderen?"))socketRef?.emit("game:finish",gameState.code,r=>{if(!r?.ok)alert(r?.message||"Spillet kunne ikke afsluttes.")});if(a==="save-settings"){const next={winMode:document.querySelector("#enh-win").value,targetScore:Number(document.querySelector("#enh-score").value),roundLimit:Number(document.querySelector("#enh-rounds").value),maxChallenges:Number(document.querySelector("#enh-challenges").value),challengesEnabled:document.querySelector("#enh-challenges-on").checked,answerTimer:Number(document.querySelector("#enh-timer").value)};socketRef?.emit("game:settings",{code:gameState.code,settings:next},r=>{if(!r?.ok)return alert(r?.message||"Indstillingerne kunne ikke gemmes.");settings={...settings,...(r.game?.settings||next)};save(SETTINGS_KEY,settings);closePanels();queueDecorate()})}if(a==="clear-stats"&&confirm("Nulstil gemt statistik på denne enhed?")){save(HISTORY_KEY,{rounds:[],games:[]});closePanels();statsOpen=true}if(a==="delete-correction"){const d=overrides();delete d[b.dataset.card];save(YEAR_OVERRIDES_KEY,d);location.reload();return}queueDecorate()},true);
+  const observer=new MutationObserver(mutations=>{if(mutations.some(m=>[...m.addedNodes,...m.removedNodes].some(n=>n.nodeType===1&&!n.closest?.(".enhance-panel")&&!n.matches?.(".enhance-panel,.enhance-tools,.enhance-status,.round-celebration,.game-finish-banner,.answer-countdown"))))queueDecorate()});observer.observe(document.querySelector("#app")||document.documentElement,{childList:true,subtree:true});
 })();
