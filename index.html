@@ -7,22 +7,6 @@
 <main id="app"></main>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="/socket.io/socket.io.js"></script><script src="/hitster-dk.js"></script>
-<script src="/spotify-player.js?v=4"></script>
+<script src="/spotify-player.js?v=5"></script>
 <script src="/app.js"></script>
-<script>
-(() => {
-  function ensureSpotifyButton() {
-    const menu = document.querySelector('button[data-action="restartGame"]')?.closest('section.game-actions');
-    if (!menu || menu.querySelector('[data-spotify-controls]')) return;
-    const box = document.createElement('div');
-    box.dataset.spotifyControls = '1';
-    box.innerHTML = '<button type="button" class="secondary" data-spotify-connect>🎧 Forbind Spotify</button>';
-    const heading = menu.querySelector('h2');
-    if (heading) heading.insertAdjacentElement('afterend', box);
-    else menu.prepend(box);
-  }
-  ensureSpotifyButton();
-  setInterval(ensureSpotifyButton, 500);
-})();
-</script>
 </body></html>
