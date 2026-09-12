@@ -15,6 +15,33 @@
     return slots;
   }
 
+  globalThis.renderPlayers = function renderPlayersFixed() {
+    const roundIsActive = Boolean(game.currentSong && !game.showAnswer);
+    const responderId = game.phase === "active_guess"
+      ? game.roundPlayerId
+      : game.phase === "challenge_guesses" ? game.challengeQueue[game.challengeTurnIndex] : null;
+    const decisions = game.challengeDecisions || {};
+    const maxChallenges = Number(game.settings?.maxChallenges ?? 5);
+
+    return `
+      <section class="card">
+        <h2>Spillere</h2>
+        ${game.players.map((player) => `
+          <div class="player-row">
+            <span>${escapeHtml(player.name)} ${player.id === game.hostId ? '<b class="badge">vært</b>' : ""} ${roundIsActive && player.id === responderId ? '<b class="badge turn-badge">Har tur</b>' : ""} ${player.connected ? "" : '<b class="offline-state">offline</b>'}</span>
+            <span>
+              ${roundIsActive && player.id === responderId ? '<b class="ready-state">Vælger…</b>' : ""}
+              ${roundIsActive && player.ready ? '<b class="ready-state is-ready">Låst</b>' : ""}
+              ${game.phase === "challenge_decisions" && game.challengeEligible.includes(player.id) && !decisions[player.id] ? '<b class="ready-state">Vælger challenge…</b>' : ""}
+              <span class="player-score">${player.score} point</span>
+              <span class="challenge-count">${player.challengesRemaining}/${maxChallenges} challenges tilbage</span>
+            </span>
+          </div>
+        `).join("")}
+      </section>
+    `;
+  };
+
   globalThis.renderChallengeChoice = function renderChallengeChoiceFixed(player) {
     const activePlayer = game.players.find((item) => item.id === game.roundPlayerId);
     const usesDecade = activePlayer.timeline.length === 0;
