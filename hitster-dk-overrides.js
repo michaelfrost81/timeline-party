@@ -8,4 +8,13 @@ if (globalThis.HITSTER_DK_CARDS) {
     year: 2017,
     source: "physical-card"
   };
+
+  globalThis.HITSTER_DK_CARDS["00278"] = {
+    cardNumber: 278,
+    artist: "Marguerite Viby",
+    title: "Tingelingeling For Mig - (Teatertosset)",
+    originalYear: 1997,
+    year: 1944,
+    source: "physical-card"
+  };
 }
