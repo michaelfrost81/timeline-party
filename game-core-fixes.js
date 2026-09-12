@@ -2,6 +2,7 @@
   "use strict";
 
   const DECADES = [1910, 1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
+  let autoPassKey = "";
 
   function blockedEqualYearSlot(timeline, slot) {
     return slot > 0 && slot < timeline.length && timeline[slot - 1] === timeline[slot];
@@ -13,6 +14,23 @@
       if (!blockedEqualYearSlot(timeline, slot)) slots.push(slot);
     }
     return slots;
+  }
+
+  function scheduleAutomaticPass(player) {
+    const key = `${game.code}:${game.roundNumber}:${player.id}`;
+    if (autoPassKey === key) return;
+    autoPassKey = key;
+    queueMicrotask(() => {
+      const stillWaiting = game
+        && game.phase === "challenge_decisions"
+        && game.challengeEligible.includes(player.id)
+        && !(game.challengeDecisions || {})[player.id];
+      if (!stillWaiting) return;
+      socket.emit("song:pass", game.code, (result) => {
+        if (!result?.ok) autoPassKey = "";
+        showServerMessage(result);
+      });
+    });
   }
 
   globalThis.renderPlayers = function renderPlayersFixed() {
@@ -57,13 +75,23 @@
     const occupiedValid = [...occupied].filter((value) => options.includes(value)).length;
     const hasAvailableAnswer = options.length - occupiedValid - reserved > 0;
     const maxChallenges = Number(game.settings?.maxChallenges ?? 5);
+    const canChallenge = player.challengesRemaining > 0 && hasAvailableAnswer;
+
+    if (!canChallenge) {
+      const reason = player.challengesRemaining <= 0
+        ? "Du har ingen challenges tilbage. Pas registreres automatisk."
+        : "Alle svarmuligheder er optaget. Pas registreres automatisk.";
+      scheduleAutomaticPass(player);
+      return `<div class="challenge-choice"><p class="hint">${reason}</p></div>`;
+    }
+
+    autoPassKey = "";
     return `
       <div class="challenge-choice">
         <p><strong>${activePlayer.name}</strong> har låst sit svar. Vil du challenge?</p>
         <p class="hint">Du har ${player.challengesRemaining}/${maxChallenges} challenges tilbage.</p>
-        ${hasAvailableAnswer ? "" : '<p class="hint">Alle svarmuligheder er optaget. Du registreres automatisk som Pas.</p>'}
         <div class="choice-actions">
-          <button type="button" class="challenge-button" data-action="challengeSong" ${player.challengesRemaining > 0 && hasAvailableAnswer ? "" : "disabled"}>Challenge</button>
+          <button type="button" class="challenge-button" data-action="challengeSong">Challenge</button>
           <button type="button" class="secondary" data-action="passChallenge">Nej tak / Pas</button>
         </div>
       </div>
