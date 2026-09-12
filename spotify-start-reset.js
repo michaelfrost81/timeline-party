@@ -26,6 +26,19 @@
     } catch {}
   }
 
+  async function verifyStillNearStart(trackUri, deviceId, headers) {
+    for (const delay of [500, 900, 1400]) {
+      await sleep(delay);
+      const state = await getPlayerState(headers);
+      if (!state || state.item?.uri !== trackUri) continue;
+      const progress = Number(state.progress_ms || 0);
+      if (progress > 3500) {
+        await seekToStart(deviceId, headers);
+        await sleep(180);
+      }
+    }
+  }
+
   async function forceTrackToStart(trackUri, deviceId, headers) {
     if (!trackUri) return;
 
@@ -38,7 +51,12 @@
         await seekToStart(deviceId, headers);
         await sleep(180);
         const verified = await getPlayerState(headers);
-        if (verified?.item?.uri === trackUri && Number(verified.progress_ms || 0) < 2500) return;
+        if (verified?.item?.uri === trackUri && Number(verified.progress_ms || 0) < 2500) {
+          // iOS can briefly report the correct position and then jump back to the
+          // previous playback offset. Re-check a few times after the track switch.
+          await verifyStillNearStart(trackUri, deviceId, headers);
+          return;
+        }
         await seekToStart(deviceId, headers);
       }
       await sleep(150);
