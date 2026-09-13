@@ -24,20 +24,39 @@
     ["Indstillinger kan ændres mellem runderne.","Settings can be changed between rounds."],["Svar-timer i sekunder (0 = fra)","Answer timer in seconds (0 = off)"],["afsluttede spil gemt på denne enhed.","completed games saved on this device."],["korrekte svar","correct answers"],["korrekte","correct"],["point i alt","total points"],["challenges tilbage","challenges left"],
     ["Spilhistorik og statistik","Game history and statistics"],["Rettede Hitster-kort","Corrected Hitster cards"],["Afslut spil og vis vinder","End game and show winner"],["Spilindstillinger","Game settings"],["Kortrettelser","Card corrections"],["Statistik","Statistics"],
     ["Placér sangen ud fra ","Place the song based on "],["s tidslinje","'s timeline"],["Grå placeringer er optaget.","Gray positions are taken."],[" har låst sit svar. Vil du challenge?"," locked their answer. Do you want to challenge?"],["Du har ","You have "],[" challenges tilbage."," challenges left."],["Venter på ","Waiting for "],[" har tur","'s turn"],
-    [" fører med "," leads with "],[" point"," points"],[" runder"," rounds"],[" spil"," games"],[" sejre"," wins"],[" gemte runder"," saved rounds"],[" afsluttede spil"," completed games"],["Runde ","Round "],["sek. tilbage","sec. left"],
     ["Afspillet:","Played:"],["Ret årstal for kort ","Correct year for card "],["Nyt årstal for kort ","New year for card "],["Spotify: finder sangen…","Spotify: finding the song…"],["Spotify: starter sangen…","Spotify: starting the song…"],["Spotify afspiller rundens sang","Spotify is playing the round's song"],
     ["Skriv dit navn først.","Enter your name first."],["Skriv både navn og spilkode.","Enter both your name and the game code."],["Der er ikke forbindelse til spilserveren endnu. Vent et øjeblik og prøv igen.","The game server is not connected yet. Wait a moment and try again."],["Vil du starte spillet forfra? Point, tidslinjer og challenges nulstilles.","Restart the game? Scores, timelines, and challenges will be reset."],["Vil du forlade spillet?","Leave the game?"],["Vil du afslutte spillet for alle spillere?","End the game for all players?"],
     ["Du har ingen challenges tilbage. Pas registreres automatisk.","You have no challenges left. Pass will be registered automatically."],["Alle svarmuligheder er optaget. Pas registreres automatisk.","All answer options are taken. Pass will be registered automatically."],["Alle svar er låst. Værten kan afsløre sangen.","All answers are locked. The host can reveal the song."],["Ingen ramte denne gang.","No one got it right this time."],
     ["Denne browser understøtter ikke kameraadgang.","This browser does not support camera access."],["Kameraadgang blev afvist.","Camera access was denied."],["Kun værten kan ","Only the host can "],["Spillet findes ikke.","The game could not be found."],["'erne","s"],[" · Optaget"," · Taken"]
   ].sort((a,b)=>b[0].length-a[0].length);
 
+  function pluralizeDanishCounts(text){
+    return text
+      .replace(/(\d+)\s+point\b/g,(_,n)=>`${n} ${Number(n)===1?"point":"points"}`)
+      .replace(/(\d+)\s+runder\b/g,(_,n)=>`${n} ${Number(n)===1?"round":"rounds"}`)
+      .replace(/(\d+)\s+spil\b/g,(_,n)=>`${n} ${Number(n)===1?"game":"games"}`)
+      .replace(/(\d+)\s+sejre\b/g,(_,n)=>`${n} ${Number(n)===1?"win":"wins"}`)
+      .replace(/(\d+)\s+gemte runder\b/g,(_,n)=>`${n} saved ${Number(n)===1?"round":"rounds"}`)
+      .replace(/(\d+)\s+afsluttede spil\b/g,(_,n)=>`${n} completed ${Number(n)===1?"game":"games"}`)
+      .replace(/(\d+)\s+spillere\b/g,(_,n)=>`${n} ${Number(n)===1?"player":"players"}`)
+      .replace(/(\d+)\s+spiller\b/g,(_,n)=>`${n} ${Number(n)===1?"player":"players"}`)
+      .replace(/(\d+)\s+sek\. tilbage\b/g,(_,n)=>`${n} sec. left`);
+  }
+
   function translateString(value){
     if(lang!=="en-US"||value==null)return String(value??"");
     const raw=String(value),lead=raw.match(/^\s*/)?.[0]||"",tail=raw.match(/\s*$/)?.[0]||"",core=raw.trim();
     if(!core)return raw;
     if(exact.has(core))return lead+exact.get(core)+tail;
-    let out=core; for(const [da,en] of fragments)out=out.split(da).join(en);
-    out=out.replace(/(\d+)\s+point\b/g,"$1 points").replace(/(\d+)\s+runder\b/g,"$1 rounds").replace(/(\d+)\s+spil\b/g,"$1 games").replace(/(\d+)\s+sejre\b/g,"$1 wins").replace(/(\d+)\s+gemte runder\b/g,"$1 saved rounds").replace(/(\d+)\s+afsluttede spil\b/g,"$1 completed games").replace(/^(\d{4})'erne$/,"$1s");
+    let out=core;
+    for(const [da,en] of fragments)out=out.split(da).join(en);
+    out=pluralizeDanishCounts(out)
+      .replace(/^(\d{4})'erne$/,"$1s")
+      .replace(/\bpoints{2,}\b/gi,"points")
+      .replace(/\bgames{2,}\b/gi,"games")
+      .replace(/\bwins{2,}\b/gi,"wins")
+      .replace(/\brounds{2,}\b/gi,"rounds")
+      .replace(/\bplayers{2,}\b/gi,"players");
     return lead+out+tail;
   }
 
@@ -46,8 +65,6 @@
     if(shouldSkip(node))return;
     if(node.nodeType===Node.TEXT_NODE){
       const current=node.nodeValue;
-      // Critical: app.js frequently reuses existing DOM nodes and writes fresh Danish text.
-      // Always translate the CURRENT value in English mode instead of restoring an old cached value.
       if(lang==="en-US"){const translated=translateString(current);if(translated!==current)node.nodeValue=translated;}
       return;
     }
