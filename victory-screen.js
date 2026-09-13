@@ -4,7 +4,6 @@
   const esc = v => String(v ?? "").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const en = () => localStorage.getItem("timeline-party-language") === "en-US";
   const t = (da,us) => en() ? us : da;
-  const myId = () => localStorage.getItem("timeline-party-player-id") || "";
   const originalIo = globalThis.io;
   if (typeof originalIo === "function") {
     globalThis.io = function(...args) {
@@ -36,7 +35,7 @@
     const rounds=Number(game.roundNumber)||0, players=game.players.length;
     const section=document.createElement("section"); section.className="card victory-screen";
     section.innerHTML=`
-      <div class="victory-hero"><div class="victory-trophy">🏆</div><p class="eyebrow">${t("SPILLET ER SLUT","GAME OVER")}</p><h1>🎉 ${t("Tillykke!","Congratulations!")}</h1><h2>${esc(winnerLabel)} ${winnerNames.length>1?t("vandt spillet!","won the game!"):t("vandt spillet!","won the game!")}</h2><p>${t("Godt spil – tak fordi I spillede!","Great game — thanks for playing!")}</p></div>
+      <div class="victory-hero"><div class="victory-trophy">🏆</div><p class="eyebrow">${t("SPILLET ER SLUT","GAME OVER")}</p><h1>🎉 ${t("Tillykke!","Congratulations!")}</h1><h2>${esc(winnerLabel)} ${t("vandt spillet!","won the game!")}</h2><p>${t("Godt spil – tak fordi I spillede!","Great game — thanks for playing!")}</p></div>
       <div class="victory-box"><h2>📊 ${t("Slutstilling","Final standings")}</h2><div class="victory-standing">${sorted.map((p,i)=>`<div class="victory-player ${winners.has(p.id)?"winner":""}"><span class="victory-rank">${i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`}</span><b>${esc(p.name)}${winners.has(p.id)?" 👑":""}</b><strong>${Number(p.score)||0} ${t("point","points")}</strong></div>`).join("")}</div></div>
       <div class="victory-box"><h2>⭐ ${t("Spiloversigt","Game summary")}</h2><div class="victory-summary"><div><b>🎵 ${rounds}</b><span>${rounds===1?t("runde","round"):t("runder","rounds")}</span></div><div><b>👥 ${players}</b><span>${players===1?t("spiller","player"):t("spillere","players")}</span></div><div><b>🏆 ${Math.max(0,...sorted.map(p=>Number(p.score)||0))}</b><span>${t("vinderpoint","winning score")}</span></div></div></div>
       <button type="button" class="victory-primary" data-action="restartGame">🔄 ${t("Spil revanche","Play again")}</button>
@@ -53,7 +52,17 @@
       if(stats){stats.click(); setTimeout(()=>document.querySelector(".enhance-panel,.xp-panel")?.scrollIntoView({behavior:"smooth",block:"start"}),50);}
     }
     if(b.dataset.victory==="menu"){
-      const leave=document.querySelector("[data-action='endGame'],[data-action='leaveGame']"); if(leave)leave.click();
+      e.preventDefault(); e.stopPropagation();
+      // A finished game no longer shows the normal leave/end buttons, so the old
+      // implementation had nothing to click. Use app.js' own leaveGame() when
+      // available; it clears the saved game and returns to the home menu safely.
+      if(typeof globalThis.leaveGame==="function"){
+        globalThis.leaveGame();
+        return;
+      }
+      // Fallback for browsers where the top-level function is not exposed.
+      localStorage.removeItem("timeline-party-game-code");
+      location.reload();
     }
   },true);
   new MutationObserver(()=>{if(game?.finished&&!document.querySelector(".victory-screen"))requestAnimationFrame(renderVictory)}).observe(document.querySelector("#app")||document.documentElement,{childList:true,subtree:true});
