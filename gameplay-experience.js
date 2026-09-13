@@ -129,3 +129,15 @@
   document.addEventListener("timeline-party-language-change", () => requestAnimationFrame(updateTurnCard));
   new MutationObserver(() => requestAnimationFrame(improveLongTimelines)).observe(document.querySelector("#app") || document.documentElement, { childList: true, subtree: true });
 })();
+
+(() => {
+  if (document.querySelector('script[data-timeline-video]')) return;
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = '/video-chat.css?v=1';
+  document.head.appendChild(css);
+  const script = document.createElement('script');
+  script.src = '/video-chat.js?v=2';
+  script.dataset.timelineVideo = '1';
+  document.head.appendChild(script);
+})();
