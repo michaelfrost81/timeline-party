@@ -1,0 +1,1 @@
+.history-game-button > span:first-child > small::before{content:" · ";}.history-game-button > span:first-child > small{display:inline;white-space:nowrap;}
