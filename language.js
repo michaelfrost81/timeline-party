@@ -75,7 +75,24 @@
   function renderSwitcher(){let el=document.querySelector("#language-switcher");if(!el){el=document.createElement("div");el.id="language-switcher";el.innerHTML='<button type="button" data-lang="da-DK">🇩🇰 Dansk</button><button type="button" data-lang="en-US">🇺🇸 English</button>';document.body.appendChild(el)}el.querySelectorAll("button").forEach(b=>b.classList.toggle("active",b.dataset.lang===lang));}
   function apply(){document.documentElement.lang=lang==="en-US"?"en-US":"da";translateNode(document.body);renderSwitcher();}
   function notifyLanguageChange(){document.dispatchEvent(new CustomEvent("timeline-party-language-change",{detail:{language:lang}}));}
-  document.addEventListener("click",e=>{const b=e.target.closest("#language-switcher [data-lang]");if(!b)return;lang=b.dataset.lang;localStorage.setItem(KEY,lang);if(lang==="da-DK"){notifyLanguageChange();location.reload();}else{apply();notifyLanguageChange();requestAnimationFrame(apply);}},true);
+  document.addEventListener("click",e=>{
+    const b=e.target.closest("#language-switcher [data-lang]");
+    if(!b)return;
+    const next=b.dataset.lang;
+    if(next===lang)return;
+    lang=next;
+    localStorage.setItem(KEY,lang);
+    if(lang==="da-DK"){
+      // Re-render the current in-memory game directly in Danish instead of
+      // reloading the page. Reloading makes app.js enter its resume flow and
+      // briefly shows “Genoptager spil…”, even though no game data is lost.
+      if(typeof globalThis.render==="function") globalThis.render();
+      notifyLanguageChange();
+      requestAnimationFrame(()=>{if(typeof globalThis.render==="function") globalThis.render();apply();notifyLanguageChange();});
+    } else {
+      apply();notifyLanguageChange();requestAnimationFrame(apply);
+    }
+  },true);
   const a=window.alert.bind(window),c=window.confirm.bind(window),p=window.prompt.bind(window);window.alert=m=>a(translateString(m));window.confirm=m=>c(translateString(m));window.prompt=(m,d)=>p(translateString(m),d);
   let queued=false;new MutationObserver(ms=>{if(lang!=="en-US"||!ms.some(m=>m.addedNodes.length||m.type==="characterData"||m.type==="attributes"))return;if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;apply()});}).observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["placeholder","title","aria-label"]});
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",apply);else apply();
