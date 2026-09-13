@@ -52,17 +52,13 @@
       if(stats){stats.click(); setTimeout(()=>document.querySelector(".enhance-panel,.xp-panel")?.scrollIntoView({behavior:"smooth",block:"start"}),50);}
     }
     if(b.dataset.victory==="menu"){
-      e.preventDefault(); e.stopPropagation();
-      // A finished game no longer shows the normal leave/end buttons, so the old
-      // implementation had nothing to click. Use app.js' own leaveGame() when
-      // available; it clears the saved game and returns to the home menu safely.
-      if(typeof globalThis.leaveGame==="function"){
-        globalThis.leaveGame();
-        return;
-      }
-      // Fallback for browsers where the top-level function is not exposed.
+      e.preventDefault(); e.stopImmediatePropagation();
+      // The match is already finished. Returning to the menu is a local navigation
+      // action and must not call leaveGame(), which asks for confirmation and can
+      // wait for a server acknowledgement that is no longer useful here.
       localStorage.removeItem("timeline-party-game-code");
-      location.reload();
+      removeVictory();
+      location.href = `${location.origin}${location.pathname}`;
     }
   },true);
   new MutationObserver(()=>{if(game?.finished&&!document.querySelector(".victory-screen"))requestAnimationFrame(renderVictory)}).observe(document.querySelector("#app")||document.documentElement,{childList:true,subtree:true});
