@@ -3,7 +3,11 @@ const { Server } = require("socket.io");
 
 const PORT = process.env.PORT || 10000;
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+  res.writeHead(200, {
+    "content-type": "text/plain; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "cache-control": "no-store"
+  });
   res.end("Timeline Party video signaling is running.\n");
 });
 
