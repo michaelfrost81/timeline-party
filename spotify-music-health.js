@@ -4,6 +4,8 @@
   const TOKEN_KEY = "timeline-party-spotify-token";
   const CLIENT_ID = "412f73264b6b4c2c97ed07d67f64622b";
   let verificationId = 0;
+  let activeCommand = null;
+  let monitorTimer = null;
 
   const selectedSpotify = () => globalThis.TimelinePartyMusicProviders?.selectedId?.() === "spotify";
   const isHostUi = () => Boolean(document.querySelector('button[data-action="restartGame"]'));
@@ -135,21 +137,51 @@
     }
   }
 
-  function schedule(command = {}) {
-    if (!selectedSpotify()) return;
-    const id = ++verificationId;
-    emitHealth("syncing");
-    setTimeout(() => verify(command, id, true), 1000);
+  function stopMonitor() {
+    clearInterval(monitorTimer);
+    monitorTimer = null;
   }
 
-  document.addEventListener("timeline-party-music-play", (event) => schedule(event.detail || {}));
-  document.addEventListener("timeline-party-music-state", (event) => schedule(event.detail || {}));
+  function startMonitor() {
+    stopMonitor();
+    if (!activeCommand || activeCommand.playing === false) return;
+    monitorTimer = setInterval(() => {
+      if (!selectedSpotify() || !activeCommand || document.hidden) return;
+      verify(activeCommand, verificationId, true);
+    }, 8000);
+  }
+
+  function schedule(command = {}) {
+    if (!selectedSpotify()) return;
+    activeCommand = { ...command };
+    const id = ++verificationId;
+    emitHealth("syncing");
+    setTimeout(() => verify(activeCommand, id, true), 1000);
+    startMonitor();
+  }
+
+  document.addEventListener("timeline-party-music-play", (event) => {
+    schedule({ ...(event.detail || {}), playing: true });
+  });
+  document.addEventListener("timeline-party-music-state", (event) => {
+    schedule(event.detail || {});
+  });
   document.addEventListener("timeline-party-music-stop", () => {
     verificationId += 1;
+    activeCommand = null;
+    stopMonitor();
     if (selectedSpotify()) emitHealth("idle", 0);
   });
   document.addEventListener("timeline-party-music-provider-change", () => {
     verificationId += 1;
+    activeCommand = null;
+    stopMonitor();
     if (selectedSpotify()) emitHealth(tokenData() ? "idle" : "warning");
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && selectedSpotify() && activeCommand?.playing !== false) {
+      verify(activeCommand, verificationId, true);
+      startMonitor();
+    }
   });
 })();
