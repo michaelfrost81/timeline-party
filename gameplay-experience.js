@@ -110,11 +110,22 @@
     document.querySelectorAll(".timeline, .timeline-list, [data-timeline]").forEach((item) => item.classList.add("gx-timeline-scroll"));
   }
 
+  function announceGameplayPhase() {
+    document.dispatchEvent(new CustomEvent("timeline-party-game-phase", {
+      detail: {
+        active: Boolean(game?.currentSong && !game?.finished),
+        phase: getPhase(),
+        roundNumber: game?.roundNumber || 0
+      }
+    }));
+  }
+
   function updateExperience() {
     updateTurnCard();
     improveLongTimelines();
     detectNewTimelineSong();
     showReveal();
+    announceGameplayPhase();
   }
 
   document.addEventListener("click", (event) => {
@@ -134,10 +145,10 @@
   if (document.querySelector('script[data-timeline-video]')) return;
   const css = document.createElement('link');
   css.rel = 'stylesheet';
-  css.href = '/video-chat.css?v=1';
+  css.href = '/video-chat.css?v=2';
   document.head.appendChild(css);
   const script = document.createElement('script');
-  script.src = '/video-chat.js?v=2';
+  script.src = '/video-chat.js?v=3';
   script.dataset.timelineVideo = '1';
   document.head.appendChild(script);
 })();
