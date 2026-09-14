@@ -5,6 +5,7 @@ const PORT = process.env.PORT || 10000;
 const roomPlayback = new Map();
 const roomHosts = new Map();
 const END_TOLERANCE_MS = 1500;
+const HEALTH_BROADCAST_MAX_AGE_MS = 15000;
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
@@ -48,6 +49,17 @@ function playbackSnapshot(room) {
 }
 function setPlayingState(room, data) { roomPlayback.set(room, { track: data.track, uri: data.uri || "", spotifyUri: data.spotifyUri || data.uri || "", durationMs: Math.max(0, Number(data.durationMs) || Number(data.track?.durationMs) || 0), startedAt: Number(data.startedAt) || Date.now(), positionMs: Math.max(0, Number(data.positionMs) || 0), changedAt: Number(data.changedAt) || Date.now(), playing: Boolean(data.playing), roundNumber: Number(data.roundNumber) || 0, senderId: data.senderId || "", stopped: false }); }
 function maybeCleanupRoom(room) { if (roomParticipants(room).length) return; roomPlayback.delete(room); roomHosts.delete(room); }
+function healthChanged(previous = {}, next = {}) {
+  if (previous.connection !== next.connection || previous.syncState !== next.syncState) return true;
+  const oldLatency = Number.isFinite(previous.latencyMs) ? previous.latencyMs : null;
+  const newLatency = Number.isFinite(next.latencyMs) ? next.latencyMs : null;
+  if ((oldLatency === null) !== (newLatency === null)) return true;
+  if (oldLatency !== null && Math.abs(oldLatency - newLatency) >= 100) return true;
+  const oldDrift = Number.isFinite(previous.driftMs) ? previous.driftMs : null;
+  const newDrift = Number.isFinite(next.driftMs) ? next.driftMs : null;
+  if ((oldDrift === null) !== (newDrift === null)) return true;
+  return oldDrift !== null && Math.abs(oldDrift - newDrift) >= 250;
+}
 
 io.on("connection", (socket) => {
   socket.on("music:ping", (payload = {}, done) => { if (typeof done === "function") done({ ok: true, echo: payload?.sentAt || null, serverTime: Date.now() }); });
@@ -58,11 +70,23 @@ io.on("connection", (socket) => {
     const host = socket.data.diagnosticsOnly ? roomHosts.get(nextRoom) === socket.data.playerId : claimHost(nextRoom, socket.data.playerId, Boolean(isHost));
     done?.({ ok: true, host, participants: roomParticipants(nextRoom), playback: playbackSnapshot(nextRoom), serverTime: Date.now() }); emitPresence(nextRoom);
   });
-  socket.on("music:ready", ({ provider, ready } = {}, done) => { if (!socket.data.room || !socket.data.playerId || socket.data.diagnosticsOnly) return done?.({ ok: false }); socket.data.provider = cleanProvider(provider || socket.data.provider); socket.data.ready = Boolean(ready); done?.({ ok: true }); emitPresence(socket.data.room); });
+  socket.on("music:ready", ({ provider, ready } = {}, done) => {
+    if (!socket.data.room || !socket.data.playerId || socket.data.diagnosticsOnly) return done?.({ ok: false });
+    const nextProvider = cleanProvider(provider || socket.data.provider); const nextReady = Boolean(ready);
+    const changed = nextProvider !== socket.data.provider || nextReady !== Boolean(socket.data.ready);
+    socket.data.provider = nextProvider; socket.data.ready = nextReady; done?.({ ok: true });
+    if (changed) emitPresence(socket.data.room);
+  });
   socket.on("music:health", ({ latencyMs, connection, syncState, driftMs } = {}, done) => {
     if (!socket.data.room || !socket.data.playerId) return done?.({ ok: false });
-    socket.data.health = { latencyMs: Number.isFinite(Number(latencyMs)) ? Math.max(0, Math.min(10000, Math.round(Number(latencyMs)))) : null, connection: ["online", "offline", "reconnecting"].includes(connection) ? connection : "unknown", syncState: ["idle", "syncing", "synced", "warning", "error", "unknown"].includes(syncState) ? syncState : "unknown", driftMs: Number.isFinite(Number(driftMs)) ? Math.max(-30000, Math.min(30000, Math.round(Number(driftMs)))) : null, at: Date.now() };
-    done?.({ ok: true }); emitPresence(socket.data.room);
+    const now = Date.now(); const previous = socket.data.health || {};
+    const next = { latencyMs: Number.isFinite(Number(latencyMs)) ? Math.max(0, Math.min(10000, Math.round(Number(latencyMs)))) : null, connection: ["online", "offline", "reconnecting"].includes(connection) ? connection : "unknown", syncState: ["idle", "syncing", "synced", "warning", "error", "unknown"].includes(syncState) ? syncState : "unknown", driftMs: Number.isFinite(Number(driftMs)) ? Math.max(-30000, Math.min(30000, Math.round(Number(driftMs)))) : null, at: now };
+    socket.data.health = next; done?.({ ok: true });
+    const lastBroadcast = Number(socket.data.lastHealthBroadcastAt) || 0;
+    if (healthChanged(previous, next) || now - lastBroadcast >= HEALTH_BROADCAST_MAX_AGE_MS) {
+      socket.data.lastHealthBroadcastAt = now;
+      emitPresence(socket.data.room);
+    }
   });
   socket.on("music:play", (payload = {}) => {
     const room = socket.data.room; if (!room || normalizeRoom(payload.room) !== room || !isRoomHost(socket)) return; const track = cleanTrack(payload.track, payload); const spotifyUri = track.providers.spotify?.uri || "";
