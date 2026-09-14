@@ -4,6 +4,12 @@
   const providerApi = () => globalThis.TimelinePartyMusicProviders;
   const isTelmore = () => providerApi()?.selectedId?.() === "telmore";
 
+  function emitHealth(state) {
+    document.dispatchEvent(new CustomEvent("timeline-party-music-provider-health", {
+      detail: { provider: "telmore", state, driftMs: null }
+    }));
+  }
+
   function renderTelmoreBridge() {
     const host = document.querySelector("[data-participant-music-sync]");
     if (!host) return;
@@ -21,22 +27,38 @@
       host.appendChild(panel);
     }
 
-    panel.innerHTML = `
+    const html = `
       <p class="hint"><strong>Telmore Musik · beta</strong></p>
       <p class="hint">Telmore kan afspille musik i browseren, men der er ikke en offentlig afspilnings-API, som Timeline Party kan styre direkte endnu.</p>
       <button type="button" class="secondary" data-open-telmore>🎵 Åbn Telmore Musik</button>
-      <p class="hint">Du kan derfor allerede vælge Telmore på denne enhed og åbne webafspilleren direkte. Automatisk start, pause og præcis synkronisering bliver aktiveret, hvis Telmore stiller en understøttet integration til rådighed.</p>
+      <p class="hint">Du kan bruge Telmores webafspiller ved siden af spillet. Timeline Party afslører ikke sangtitel eller kunstner før svaret, så den manuelle løsning giver ikke svaret væk.</p>
     `;
+    if (panel.innerHTML !== html) panel.innerHTML = html;
   }
 
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-open-telmore]");
     if (!button) return;
     event.preventDefault();
-    providerApi()?.openExternal?.("telmore");
+    const opened = providerApi()?.openExternal?.("telmore");
+    emitHealth(opened ? "warning" : "error");
   });
 
-  document.addEventListener("timeline-party-music-provider-change", renderTelmoreBridge);
-  new MutationObserver(renderTelmoreBridge).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener("timeline-party-music-provider-change", () => {
+    renderTelmoreBridge();
+    if (isTelmore()) emitHealth("warning");
+  });
+  document.addEventListener("timeline-party-music-play", () => {
+    if (isTelmore()) emitHealth("warning");
+  });
+  document.addEventListener("timeline-party-music-stop", () => {
+    if (isTelmore()) emitHealth("idle");
+  });
+
+  const observer = new MutationObserver(() => {
+    if (!document.querySelector("[data-participant-music-sync]")) return;
+    renderTelmoreBridge();
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
   renderTelmoreBridge();
 })();
