@@ -3,6 +3,7 @@ const { Server } = require("socket.io");
 
 const PORT = process.env.PORT || 10000;
 const roomPlayback = new Map();
+const roomHosts = new Map();
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
@@ -31,15 +32,27 @@ function roomParticipants(room) {
   const sockets = io.sockets.adapter.rooms.get(room) || new Set();
   return [...sockets].map((socketId) => {
     const peer = io.sockets.sockets.get(socketId);
-    return peer && peer.data.playerId ? { playerId: peer.data.playerId, name: peer.data.name || "Spiller", provider: peer.data.provider || "spotify", ready: Boolean(peer.data.ready), host: Boolean(peer.data.isHost) } : null;
+    return peer && peer.data.playerId ? {
+      playerId: peer.data.playerId,
+      name: peer.data.name || "Spiller",
+      provider: peer.data.provider || "spotify",
+      ready: Boolean(peer.data.ready),
+      host: roomHosts.get(room) === peer.data.playerId
+    } : null;
   }).filter(Boolean);
 }
 function emitPresence(room) { io.to(room).emit("music:presence", { participants: roomParticipants(room), at: Date.now() }); }
 function isRoomHost(socket) {
-  if (!socket.data.room || !socket.data.playerId) return false;
-  const participants = roomParticipants(socket.data.room);
-  const declaredHost = participants.find((item) => item.host);
-  return declaredHost ? declaredHost.playerId === socket.data.playerId : Boolean(socket.data.isHost);
+  return Boolean(socket.data.room && socket.data.playerId && roomHosts.get(socket.data.room) === socket.data.playerId);
+}
+function claimHost(room, playerId, requested) {
+  if (!requested) return false;
+  const current = roomHosts.get(room);
+  if (!current) {
+    roomHosts.set(room, playerId);
+    return true;
+  }
+  return current === playerId;
 }
 function playbackSnapshot(room) {
   const current = roomPlayback.get(room);
@@ -63,20 +76,29 @@ function setPlayingState(room, data) {
     stopped: false
   });
 }
+function maybeCleanupRoom(room) {
+  if (roomParticipants(room).length) return;
+  roomPlayback.delete(room);
+  roomHosts.delete(room);
+}
 
 io.on("connection", (socket) => {
   socket.on("music:join", ({ room, playerId, name, provider, ready, isHost } = {}, done) => {
     const nextRoom = normalizeRoom(room);
     if (!nextRoom || !playerId) return done?.({ ok: false });
-    if (socket.data.room && socket.data.room !== nextRoom) socket.leave(socket.data.room);
+    const previousRoom = socket.data.room;
+    if (previousRoom && previousRoom !== nextRoom) {
+      socket.leave(previousRoom);
+      setTimeout(() => emitPresence(previousRoom), 0);
+    }
     socket.data.room = nextRoom;
     socket.data.playerId = String(playerId).slice(0, 160);
     socket.data.name = String(name || "Spiller").slice(0, 80);
     socket.data.provider = cleanProvider(provider);
     socket.data.ready = Boolean(ready);
-    socket.data.isHost = Boolean(isHost);
     socket.join(nextRoom);
-    done?.({ ok: true, participants: roomParticipants(nextRoom), playback: playbackSnapshot(nextRoom), serverTime: Date.now() });
+    const host = claimHost(nextRoom, socket.data.playerId, Boolean(isHost));
+    done?.({ ok: true, host, participants: roomParticipants(nextRoom), playback: playbackSnapshot(nextRoom), serverTime: Date.now() });
     emitPresence(nextRoom);
   });
 
@@ -120,9 +142,10 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     const room = socket.data.room;
-    if (room) setTimeout(() => {
+    if (!room) return;
+    setTimeout(() => {
       emitPresence(room);
-      if (!roomParticipants(room).length) setTimeout(() => { if (!roomParticipants(room).length) roomPlayback.delete(room); }, 10 * 60 * 1000);
+      if (!roomParticipants(room).length) setTimeout(() => maybeCleanupRoom(room), 10 * 60 * 1000);
     }, 0);
   });
 });
