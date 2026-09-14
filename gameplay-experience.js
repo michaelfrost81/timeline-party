@@ -24,6 +24,11 @@
 
   function currentPlayer() { return game?.players?.find((player) => player.id === myId()); }
   function activePlayer() { return game?.players?.find((player) => player.id === game?.roundPlayerId); }
+  function playerById(id) { return game?.players?.find((player) => player.id === id); }
+  function currentChallengeResponderId() {
+    if (game?.phase !== "challenge_guesses") return "";
+    return game?.challengeQueue?.[game?.challengeTurnIndex || 0] || "";
+  }
 
   function getPhase() {
     if (!game?.currentSong) return null;
@@ -53,6 +58,47 @@
     card.className = `card gx-turn-card gx-${getPhase()}`;
     card.innerHTML = `<div class="gx-turn-icon">${copy[0]}</div><div><p class="eyebrow">${copy[1]}</p><h2>${copy[2]}</h2></div>`;
     hero.after(card);
+  }
+
+  function updateChallengeStrip() {
+    document.querySelector(".gx-challenge-strip")?.remove();
+    const hero = document.querySelector(".hero-card");
+    if (!hero || !game?.currentSong) return;
+    if (!game?.settings?.challengesEnabled) return;
+    if (!["challenge_decisions", "challenge_guesses", "awaiting_reveal"].includes(game?.phase)) return;
+
+    const queue = Array.isArray(game.challengeQueue) ? game.challengeQueue : [];
+    const eligible = Array.isArray(game.challengeEligible) ? game.challengeEligible : [];
+    const decisions = game.challengeDecisions || {};
+    const currentResponder = currentChallengeResponderId();
+
+    const card = document.createElement("section");
+    card.className = "card gx-challenge-strip";
+
+    let title = text("Challenge-fase", "Challenge phase");
+    let subtitle = text("Spillerne vælger challenge eller pas.", "Players are choosing challenge or pass.");
+    if (game.phase === "challenge_guesses") {
+      const responder = playerById(currentResponder);
+      title = text("Challenge-rækkefølge", "Challenge order");
+      subtitle = responder ? text(`${responder.name} svarer nu.`, `${responder.name} answers now.`) : text("Næste challenger svarer.", "Next challenger answers.");
+    } else if (game.phase === "awaiting_reveal") {
+      title = text("Challenges færdige", "Challenges complete");
+      subtitle = text("Alle svar er låst. Klar til afsløring.", "All answers are locked. Ready to reveal.");
+    }
+
+    const queueHtml = queue.length ? queue.map((id, index) => {
+      const player = playerById(id);
+      const active = id === currentResponder;
+      const done = game.phase === "challenge_guesses" && index < (game.challengeTurnIndex || 0);
+      return `<span class="gx-challenge-chip ${active ? "current" : ""} ${done ? "done" : ""}">${index + 1}. ${player?.name || text("Spiller", "Player")}${active ? ` · ${text("NU", "NOW")}` : ""}</span>`;
+    }).join("") : `<span class="gx-challenge-empty">${text("Ingen har valgt challenge endnu.", "No one has chosen challenge yet.")}</span>`;
+
+    const pending = game.phase === "challenge_decisions" ? eligible.filter((id) => !decisions[id]).length : 0;
+    const pendingText = game.phase === "challenge_decisions" ? `<small>${pending} ${pending === 1 ? text("mangler at vælge", "still needs to choose") : text("mangler at vælge", "still need to choose")}</small>` : "";
+
+    card.innerHTML = `<div class="gx-challenge-head"><div><p class="eyebrow">⚡ ${title}</p><h3>${subtitle}</h3></div>${pendingText}</div><div class="gx-challenge-queue">${queueHtml}</div>`;
+    const turnCard = document.querySelector(".gx-turn-card");
+    (turnCard || hero).after(card);
   }
 
   function showToast(message) {
@@ -99,39 +145,25 @@
     document.querySelectorAll(".timeline, .timeline-list, [data-timeline]").forEach((item) => item.classList.add("gx-timeline-scroll"));
   }
 
-  function challengePlayerIds() {
-    const ids = new Set();
-    const add = (value) => {
-      if (!value) return;
-      if (typeof value === "string") ids.add(value);
-      else if (value.playerId) ids.add(value.playerId);
-      else if (value.id) ids.add(value.id);
-    };
-    [game?.challengers, game?.challengePlayers, game?.challengeQueue, game?.challenges].forEach((list) => {
-      if (Array.isArray(list)) list.forEach(add);
-    });
-    game?.players?.forEach((player) => {
-      if (player.challenging || player.challengeActive || player.hasChallenged || player.challengePending) ids.add(player.id);
-    });
-    return [...ids];
-  }
-
   function announceGameplayPhase() {
     const active = activePlayer();
     document.dispatchEvent(new CustomEvent("timeline-party-game-phase", {
       detail: {
         active: Boolean(game?.currentSong && !game?.finished),
-        phase: getPhase(),
+        phase: game?.phase || getPhase(),
         roundNumber: game?.roundNumber || 0,
         activePlayerId: active?.id || game?.roundPlayerId || "",
         activePlayerName: active?.name || "",
-        challengerIds: challengePlayerIds()
+        challengerIds: [...(game?.challengeQueue || [])],
+        challengeQueue: [...(game?.challengeQueue || [])],
+        challengeTurnIndex: game?.challengeTurnIndex || 0,
+        currentChallengeResponderId: currentChallengeResponderId()
       }
     }));
   }
 
   function updateExperience() {
-    updateTurnCard(); improveLongTimelines(); detectNewTimelineSong(); showReveal(); announceGameplayPhase();
+    updateTurnCard(); updateChallengeStrip(); improveLongTimelines(); detectNewTimelineSong(); showReveal(); announceGameplayPhase();
   }
 
   document.addEventListener("click", (event) => {
@@ -143,12 +175,12 @@
     if (button.dataset.action === "placeSong" || button.dataset.action === "guessDecade") showToast(text("🎯 Valg registreret", "🎯 Choice registered"));
   }, true);
 
-  document.addEventListener("timeline-party-language-change", () => requestAnimationFrame(updateTurnCard));
+  document.addEventListener("timeline-party-language-change", () => requestAnimationFrame(updateExperience));
   new MutationObserver(() => requestAnimationFrame(improveLongTimelines)).observe(document.querySelector("#app") || document.documentElement, { childList: true, subtree: true });
 })();
 
 (() => {
   if (document.querySelector('script[data-timeline-video]')) return;
-  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/video-chat.css?v=4'; document.head.appendChild(css);
-  const script = document.createElement('script'); script.src = '/video-chat.js?v=4'; script.dataset.timelineVideo = '1'; document.head.appendChild(script);
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/video-chat.css?v=5'; document.head.appendChild(css);
+  const script = document.createElement('script'); script.src = '/video-chat.js?v=5'; script.dataset.timelineVideo = '1'; document.head.appendChild(script);
 })();
