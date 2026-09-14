@@ -13,6 +13,7 @@
   let status = "";
   let pendingCommand = null;
   let lastRemoteUri = "";
+  let musicParticipants = [];
 
   const providers = () => globalThis.TimelinePartyMusicProviders;
   const selectedProvider = () => providers()?.current?.() || { id: "spotify", label: "Spotify", available: true };
@@ -21,6 +22,12 @@
   const playerName = () => localStorage.getItem(NAME_KEY) || "Spiller";
   const isHostUi = () => Boolean(document.querySelector('button[data-action="restartGame"]'));
   const tokenData = () => { try { return JSON.parse(localStorage.getItem(TOKEN_KEY) || "null"); } catch { return null; } };
+
+  function providerReady() {
+    const current = selectedProvider();
+    if (current.id === "spotify") return Boolean(tokenData());
+    return Boolean(current.available && current.connected?.());
+  }
 
   function saveToken(data, old = null) {
     const value = { access_token: data.access_token, refresh_token: data.refresh_token || old?.refresh_token || "", expires_at: Date.now() + (Math.max(60, Number(data.expires_in) || 3600) - 30) * 1000 };
@@ -72,6 +79,19 @@
 
   function setStatus(message) { status = message || ""; renderMusicStatus(); }
 
+  function providerLabel(id) {
+    return providers()?.providers?.[id]?.label || id || "Ukendt";
+  }
+
+  function renderReadiness() {
+    if (!isHostUi() || !musicParticipants.length) return "";
+    const others = musicParticipants.filter((item) => item.playerId !== playerId());
+    if (!others.length) return '<p class="hint">Ingen andre spillere er koblet på musikdelen endnu.</p>';
+    const readyCount = others.filter((item) => item.ready).length;
+    const rows = others.map((item) => `<span class="music-ready-player">${item.ready ? "🟢" : "🟠"} ${item.name} · ${providerLabel(item.provider)}</span>`).join("");
+    return `<div class="music-readiness"><p class="hint"><strong>Musik klar hos ${readyCount}/${others.length} deltagere</strong></p><div class="music-ready-list">${rows}</div></div>`;
+  }
+
   function renderMusicStatus() {
     const menu = document.querySelector("section.game-actions");
     if (!menu) return;
@@ -97,11 +117,13 @@
       const connected = Boolean(tokenData());
       connect = !isHostUi() ? `<button type="button" class="secondary" data-spotify-connect>${connected ? "🟢 Spotify tilsluttet" : "🎧 Forbind Spotify"}</button>` : "";
       helper = connected ? "Spotify er klar til fælles sangafspilning." : "Forbind din egen Spotify Premium-konto for at høre rundens sang på denne enhed.";
+    } else if (current.id === "telmore") {
+      helper = "Telmore Musik er valgt. Webafspilleren kan åbnes herfra, men fuld automatisk synkronisering er ikke tilgængelig endnu.";
     } else if (!current.available) {
       helper = `${current.label} er gjort klar i strukturen, men selve login og afspilning er ikke aktiveret endnu.`;
     }
 
-    const html = `<div class="music-provider-picker"><p class="hint"><strong>Musiktjeneste på denne enhed</strong></p><div class="music-provider-buttons">${choices}</div></div>${connect}<p class="hint music-sync-hint">${status || helper}</p>`;
+    const html = `<div class="music-provider-picker"><p class="hint"><strong>Musiktjeneste på denne enhed</strong></p><div class="music-provider-buttons">${choices}</div></div>${connect}<p class="hint music-sync-hint">${status || helper}</p>${renderReadiness()}`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
 
@@ -113,6 +135,10 @@
       musicSocket.on("music:play", handleRemotePlay);
       musicSocket.on("music:state", handleRemoteState);
       musicSocket.on("music:stop", handleRemoteStop);
+      musicSocket.on("music:presence", (payload) => {
+        musicParticipants = Array.isArray(payload?.participants) ? payload.participants : [];
+        renderMusicStatus();
+      });
       musicSocket.on("disconnect", () => setStatus("Musiksynkronisering forbinder igen…"));
     }
     if (musicSocket.connected && joinedRoom !== code) joinSignalRoom();
@@ -120,7 +146,25 @@
 
   function joinSignalRoom() {
     const code = room(); if (!musicSocket?.connected || !code) return;
-    musicSocket.emit("music:join", { room: code, playerId: playerId(), name: playerName(), provider: selectedProvider().id }, (result) => { if (result?.ok) { joinedRoom = code; renderMusicStatus(); } });
+    musicSocket.emit("music:join", {
+      room: code,
+      playerId: playerId(),
+      name: playerName(),
+      provider: selectedProvider().id,
+      ready: providerReady(),
+      isHost: isHostUi()
+    }, (result) => {
+      if (result?.ok) {
+        joinedRoom = code;
+        musicParticipants = Array.isArray(result.participants) ? result.participants : musicParticipants;
+        renderMusicStatus();
+      }
+    });
+  }
+
+  function reportReadiness() {
+    if (!musicSocket?.connected || !joinedRoom) return;
+    musicSocket.emit("music:ready", { provider: selectedProvider().id, ready: providerReady() });
   }
 
   function storePending(command) { pendingCommand = command; try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(command)); } catch {} }
@@ -128,13 +172,19 @@
 
   function spotifyUriFrom(command) { return command?.track?.providers?.spotify?.uri || command?.spotifyUri || command?.uri || ""; }
 
+  function dispatchMusicEvent(type, command) {
+    document.dispatchEvent(new CustomEvent(`timeline-party-music-${type}`, { detail: command || {} }));
+  }
+
   async function playRemote(command) {
     const current = selectedProvider();
+    dispatchMusicEvent("play", command);
     if (!current.available) { storePending(command); setStatus(`🎵 Værten har startet sangen. ${current.label} bliver understøttet i en kommende version.`); return; }
+    if (current.id === "telmore") { storePending(command); setStatus("🎵 Værten har startet sangen. Telmore er valgt, men automatisk afspilning kræver stadig en understøttet integration fra Telmore."); return; }
     if (current.id !== "spotify") { storePending(command); setStatus(`⚠️ Afspilning via ${current.label} er endnu ikke implementeret.`); return; }
     const uri = spotifyUriFrom(command);
     if (!uri) { setStatus("⚠️ Rundens sang mangler et Spotify-match."); return; }
-    if (!tokenData()) { storePending(command); setStatus("🎵 Værten har startet sangen. Forbind Spotify for at høre den her."); return; }
+    if (!tokenData()) { storePending(command); setStatus("🎵 Værten har startet sangen. Forbind Spotify for at høre den her."); reportReadiness(); return; }
 
     storePending(command); setStatus("🎵 Gør Spotify klar…");
     try {
@@ -146,13 +196,16 @@
       await spotifyApi(`/me/player/play?device_id=${encodeURIComponent(deviceId)}`, { method: "PUT", body: JSON.stringify({ uris: [uri], position_ms: Math.floor(position) }) });
       lastRemoteUri = uri; clearPending();
       setStatus(`🔊 Fælles afspilning er i gang${position > 1200 ? ` · synkroniseret ved ${Math.round(position / 100) / 10} sek.` : ""}`);
-    } catch (error) { setStatus(`⚠️ ${error.message}`); }
+      reportReadiness();
+    } catch (error) { setStatus(`⚠️ ${error.message}`); reportReadiness(); }
   }
 
   function handleRemotePlay(command) { if (command.senderId !== playerId()) playRemote(command); }
 
   async function handleRemoteState(command) {
-    if (command.senderId === playerId() || selectedProvider().id !== "spotify" || !tokenData()) return;
+    if (command.senderId === playerId()) return;
+    dispatchMusicEvent("state", command);
+    if (selectedProvider().id !== "spotify" || !tokenData()) return;
     try {
       const deviceId = await findTimelinePartyDevice(4000);
       const elapsed = command.playing ? Math.max(0, Date.now() - Number(command.changedAt || Date.now())) : 0;
@@ -171,6 +224,7 @@
 
   async function handleRemoteStop(command) {
     if (command?.senderId === playerId()) return;
+    dispatchMusicEvent("stop", command);
     clearPending();
     if (selectedProvider().id !== "spotify" || !tokenData()) { setStatus("Klar til næste runde."); return; }
     try { const deviceId = await findTimelinePartyDevice(3000); await spotifyApi(`/me/player/pause?device_id=${encodeURIComponent(deviceId)}`, { method: "PUT" }); setStatus("Musikken er stoppet. Klar til næste runde."); }
@@ -190,13 +244,13 @@
         const uri = item?.uri || "";
         if (state?.is_playing && uri && Number.isFinite(state.progress_ms)) {
           const track = {
-            title: item?.name || "",
-            artist: (item?.artists || []).map((artist) => artist.name).join(", "),
             isrc: item?.external_ids?.isrc || "",
             durationMs: Number(item?.duration_ms) || 0,
             providers: { spotify: { uri, id: item?.id || "" } }
           };
-          musicSocket.emit("music:play", { room: room(), track, uri, spotifyUri: uri, durationMs: track.durationMs, startedAt: Date.now() - Number(state.progress_ms || 0) });
+          const command = { room: room(), track, uri, spotifyUri: uri, durationMs: track.durationMs, startedAt: Date.now() - Number(state.progress_ms || 0) };
+          musicSocket.emit("music:play", command);
+          dispatchMusicEvent("play", { ...command, senderId: playerId() });
           setStatus("🔊 Sangen sendes synkroniseret til de tilsluttede spillere.");
           return;
         }
@@ -210,7 +264,9 @@
     if (!isHostUi() || !musicSocket?.connected || !tokenData()) return;
     try {
       const state = await currentSpotifyState(); if (!state?.item?.uri) return;
-      musicSocket.emit("music:state", { room: room(), playing: Boolean(state.is_playing), positionMs: Number(state.progress_ms) || 0, changedAt: Date.now(), uri: state.item.uri, spotifyUri: state.item.uri, track: { providers: { spotify: { uri: state.item.uri, id: state.item.id || "" } } } });
+      const command = { room: room(), playing: Boolean(state.is_playing), positionMs: Number(state.progress_ms) || 0, changedAt: Date.now(), uri: state.item.uri, spotifyUri: state.item.uri, track: { durationMs: Number(state.item.duration_ms) || 0, isrc: state.item.external_ids?.isrc || "", providers: { spotify: { uri: state.item.uri, id: state.item.id || "" } } } };
+      musicSocket.emit("music:state", command);
+      dispatchMusicEvent("state", { ...command, senderId: playerId() });
     } catch {}
   }
 
@@ -224,17 +280,25 @@
       status = current.available ? "" : `${current.label} er valgt, men afspilning er ikke aktiveret endnu.`;
       renderMusicStatus();
       if (musicSocket?.connected) joinSignalRoom();
+      setTimeout(reportReadiness, 50);
       return;
     }
 
     const gameButton = event.target.closest("button[data-action]");
     if (gameButton?.dataset.action === "useQrSong") setTimeout(broadcastHostPlaybackWhenReady, 250);
-    if (gameButton && ["revealSong", "nextSong", "restartGame", "endGame"].includes(gameButton.dataset.action)) { if (isHostUi() && musicSocket?.connected) musicSocket.emit("music:stop", { room: room() }); }
+    if (gameButton && ["revealSong", "nextSong", "restartGame", "endGame"].includes(gameButton.dataset.action)) {
+      if (isHostUi() && musicSocket?.connected) {
+        musicSocket.emit("music:stop", { room: room() });
+        dispatchMusicEvent("stop", { senderId: playerId(), at: Date.now() });
+      }
+    }
     if (event.target.closest("[data-spotify-pause]")) setTimeout(broadcastHostState, 500);
     if (event.target.closest("[data-spotify-manual-play]")) setTimeout(broadcastHostPlaybackWhenReady, 350);
+    if (event.target.closest("[data-spotify-connect]")) setTimeout(() => { reportReadiness(); renderMusicStatus(); }, 1800);
   });
 
-  document.addEventListener("timeline-party-music-provider-change", renderMusicStatus);
+  document.addEventListener("timeline-party-music-provider-change", () => { renderMusicStatus(); reportReadiness(); });
+  window.addEventListener("storage", (event) => { if (event.key === TOKEN_KEY) { renderMusicStatus(); reportReadiness(); } });
 
   function restorePending() {
     try { const saved = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "null"); if (saved && Date.now() - Number(saved.startedAt || 0) < Math.max(180000, Number(saved.track?.durationMs || saved.durationMs) || 0)) playRemote(saved); } catch {}
@@ -242,6 +306,6 @@
 
   const observer = new MutationObserver(() => { renderMusicStatus(); ensureSignal(); });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  setInterval(() => { ensureSignal(); renderMusicStatus(); }, 1500);
+  setInterval(() => { ensureSignal(); renderMusicStatus(); reportReadiness(); }, 1500);
   ensureSignal(); renderMusicStatus(); setTimeout(restorePending, 1500);
 })();
