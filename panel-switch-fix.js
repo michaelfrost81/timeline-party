@@ -68,10 +68,33 @@
     });
   }
 
+  function loadVideoTestModules() {
+    if (document.querySelector('script[data-video-test-bootstrap]')) return;
+
+    if (!document.querySelector('link[href^="video-chat.css"],link[href^="/video-chat.css"]')) {
+      const style = document.createElement("link");
+      style.rel = "stylesheet";
+      style.href = "/video-chat.css?v=3";
+      document.head.appendChild(style);
+    }
+
+    const warmup = document.createElement("script");
+    warmup.src = "/video-warmup.js?v=1";
+    warmup.dataset.videoTestBootstrap = "warmup";
+    warmup.onload = () => {
+      const video = document.createElement("script");
+      video.src = "/video-chat.js?v=4";
+      video.dataset.videoTestBootstrap = "chat";
+      document.body.appendChild(video);
+    };
+    document.body.appendChild(warmup);
+  }
+
   document.addEventListener("timeline-party-language-change", () => requestAnimationFrame(translateDynamicStats));
 
   const observer = new MutationObserver(() => requestAnimationFrame(translateDynamicStats));
   observer.observe(document.querySelector("#app") || document.documentElement, { childList: true, subtree: true });
 
   translateDynamicStats();
+  loadVideoTestModules();
 })();
