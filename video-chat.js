@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const SIGNAL_URL = "https://timeline-party-video-signal.onrender.com";
+  const SIGNAL_URL = "https://timeline-party-video-signal-6-10.onrender.com";
   const GAME_CODE_KEY = "timeline-party-game-code";
   const PLAYER_ID_KEY = "timeline-party-player-id";
   const NAME_KEY = "timeline-party-name";
@@ -11,6 +11,7 @@
   const peerMeta = new Map();
   let signal=null, localStream=null, screenStream=null, joined=false, joining=false, joinedRoom="", focusId=null;
   let cameraEnabled=true, micEnabled=true, facingMode="user", minimized=false, activeSpeakerId=null, autoStartTriedCode="";
+  let gameplayActive=false, autoMinimized=false;
   const levels=new Map(); let audioContext=null, meterTimer=null;
 
   const en=()=>localStorage.getItem("timeline-party-language")==="en-US";
@@ -38,7 +39,7 @@
     try{await ensureLocalMedia();signal=globalThis.io(SIGNAL_URL,{transports:["websocket","polling"],timeout:20000,reconnection:true,reconnectionAttempts:8,reconnectionDelay:1000});bindSignal();
       await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(t("Videoforbindelsen svarede ikke.","The video connection did not respond."))),25000);
         signal.on("connect_error",err=>{if(!signal?.active){clearTimeout(timer);reject(err)}});
-        signal.on("connect",()=>signal.emit("video:join",{room,playerId:myId(),name:myName()},result=>{clearTimeout(timer);if(!result?.ok){if(result?.reason==="room-full")return reject(new Error(t("Videorummet har allerede 10 deltagere.","The video room already has 10 participants.")));return reject(new Error(t("Kunne ikke åbne videorummet.","Could not open the video room.")))}joined=true;joining=false;joinedRoom=room;(result.peers||[]).forEach(meta=>{peerMeta.set(meta.socketId,meta);createPeer(meta.socketId,true)});sendPresence();startAudioMeter();adaptVideoQuality();renderVideoRoom();resolve()}));});
+        signal.on("connect",()=>signal.emit("video:join",{room,playerId:myId(),name:myName()},result=>{clearTimeout(timer);if(!result?.ok){if(result?.reason==="room-full")return reject(new Error(t("Videorummet har allerede 10 deltagere.","The video room already has 10 participants.")));return reject(new Error(t("Kunne ikke åbne videorummet.","Could not open the video room.")))}joined=true;joining=false;joinedRoom=room;(result.peers||[]).forEach(meta=>{peerMeta.set(meta.socketId,meta);createPeer(meta.socketId,true)});sendPresence();startAudioMeter();adaptVideoQuality();if(gameplayActive){minimized=true;autoMinimized=true}renderVideoRoom();resolve()}));});
     }catch(error){joining=false;if(!quiet)alert(error?.message||t("Video kunne ikke startes.","Video could not be started."));leaveVideo(false);renderVideoRoom()}
   }
 
@@ -84,7 +85,7 @@
   }
   function stopAudioMeter(){if(meterTimer)clearInterval(meterTimer);meterTimer=null;levels.clear();activeSpeakerId=null}
 
-  function leaveVideo(removeUi=true){try{signal?.emit("video:leave");signal?.disconnect()}catch{}signal=null;joined=false;joining=false;joinedRoom="";focusId=null;minimized=false;stopAudioMeter();peers.forEach(({pc})=>pc.close());peers.clear();peerMeta.clear();screenStream?.getTracks?.().forEach(x=>x.stop());screenStream=null;localStream?.getTracks?.().forEach(x=>x.stop());localStream=null;if(removeUi)renderVideoRoom()}
+  function leaveVideo(removeUi=true){try{signal?.emit("video:leave");signal?.disconnect()}catch{}signal=null;joined=false;joining=false;joinedRoom="";focusId=null;minimized=false;autoMinimized=false;stopAudioMeter();peers.forEach(({pc})=>pc.close());peers.clear();peerMeta.clear();screenStream?.getTracks?.().forEach(x=>x.stop());screenStream=null;localStream?.getTracks?.().forEach(x=>x.stop());localStream=null;if(removeUi)renderVideoRoom()}
 
   function stateText(state){if(state==="connected")return t("forbundet","connected");if(state==="disconnected")return t("forbinder igen","reconnecting");if(state==="failed")return t("forbindelse mistet","connection lost");return t("forbinder","connecting")}
   function tileHtml(id,name,local,meta,entry){const camera=local?cameraEnabled:meta?.camera!==false,mic=local?micEnabled:meta?.microphone!==false,sharing=local?Boolean(screenStream):Boolean(meta?.sharing),state=local?"connected":entry?.state||"connecting";return `<div class="video-tile ${focusId===id?"focused":""} ${activeSpeakerId===id?"speaking":""}" data-video-id="${esc(id)}"><div class="video-media"><video data-video-stream="${esc(id)}" autoplay playsinline ${local?"muted":""}></video><div class="video-avatar">${esc(initials(name))}</div></div><div class="video-tile-bar"><span><strong>${esc(name)}</strong>${local?` <small>${t("(dig)","(you)")}</small>`:""}<small class="video-state-label"> · ${esc(stateText(state))}</small></span><span class="video-icons">${sharing?"🖥️":""} ${camera?"📹":"🚫"} ${mic?"🎙️":"🔇"} <i class="video-dot ${esc(state)}"></i></span></div><button class="video-focus-button" type="button" data-video-action="focus" data-id="${esc(id)}">⛶</button></div>`}
@@ -92,7 +93,7 @@
   function miniSpeakerHtml(){
     const id=activeSpeakerId&&((activeSpeakerId==="local")||peers.has(activeSpeakerId))?activeSpeakerId:(peers.keys().next().value||"local");
     const local=id==="local", meta=local?null:peerMeta.get(id), name=local?myName():(meta?.name||t("Spiller","Player"));
-    return `<div class="video-mini-speaker" data-mini-id="${esc(id)}"><div class="video-mini-media"><video data-video-mini-stream="${esc(id)}" autoplay playsinline ${local?"muted":""}></video><div class="video-avatar">${esc(initials(name))}</div></div><div class="video-mini-name"><strong>${esc(name)}</strong><small>${t("Aktiv taler","Active speaker")}</small></div></div>`;
+    return `<div class="video-mini-speaker" data-mini-id="${esc(id)}"><div class="video-mini-media"><video data-video-mini-stream="${esc(id)}" autoplay playsinline ${local?"muted":""}></video><div class="video-avatar">${esc(initials(name))}</div></div><div class="video-mini-name"><strong>${esc(name)}</strong><small>${gameplayActive?t("Spillet har prioritet","Gameplay has priority"):t("Aktiv taler","Active speaker")}</small></div></div>`;
   }
   function updateMiniSpeaker(){if(!minimized)return;const holder=document.querySelector(".video-mini-wrap");if(holder){holder.innerHTML=miniSpeakerHtml();attachMiniStream()}}
 
@@ -107,6 +108,15 @@
   function attachMiniStream(){const v=document.querySelector("video[data-video-mini-stream]");if(!v)return;const id=v.dataset.videoMiniStream;if(id==="local")v.srcObject=screenStream||localStream;else{const stream=peers.get(id)?.stream;if(stream&&v.srcObject!==stream)v.srcObject=stream}}
   function decorate(){const code=gameCode();if(!code){autoStartTriedCode="";if(joined)leaveVideo(false);document.querySelector(".video-room")?.remove();return}if(!document.querySelector(".video-room"))renderVideoRoom();if(autoStartEnabled()&&!joined&&!joining&&autoStartTriedCode!==code){autoStartTriedCode=code;setTimeout(()=>joinVideo({quiet:true}),300)}}
 
-  document.addEventListener("click",e=>{const b=e.target.closest("[data-video-action]");if(!b)return;e.preventDefault();const a=b.dataset.videoAction;if(a==="join")joinVideo();if(a==="leave")leaveVideo();if(a==="mic")toggleMic();if(a==="camera")toggleCamera();if(a==="flip")flipCamera();if(a==="share")toggleShare();if(a==="minimize"){minimized=!minimized;renderVideoRoom()}if(a==="focus"){focusId=focusId===b.dataset.id?null:b.dataset.id;renderVideoRoom()}if(a==="auto"){const enabled=!autoStartEnabled();localStorage.setItem(AUTO_VIDEO_KEY,enabled?"1":"0");if(enabled)autoStartTriedCode="";renderVideoRoom();decorate()}},true);
+  function syncGameplayVideo(event){
+    gameplayActive=Boolean(event?.detail?.active);
+    if(!joined)return;
+    if(gameplayActive&&!minimized){minimized=true;autoMinimized=true;renderVideoRoom();return}
+    if(!gameplayActive&&minimized&&autoMinimized){minimized=false;autoMinimized=false;renderVideoRoom();return}
+    updateMiniSpeaker();
+  }
+
+  document.addEventListener("click",e=>{const b=e.target.closest("[data-video-action]");if(!b)return;e.preventDefault();const a=b.dataset.videoAction;if(a==="join")joinVideo();if(a==="leave")leaveVideo();if(a==="mic")toggleMic();if(a==="camera")toggleCamera();if(a==="flip")flipCamera();if(a==="share")toggleShare();if(a==="minimize"){minimized=!minimized;autoMinimized=false;renderVideoRoom()}if(a==="focus"){focusId=focusId===b.dataset.id?null:b.dataset.id;renderVideoRoom()}if(a==="auto"){const enabled=!autoStartEnabled();localStorage.setItem(AUTO_VIDEO_KEY,enabled?"1":"0");if(enabled)autoStartTriedCode="";renderVideoRoom();decorate()}},true);
+  document.addEventListener("timeline-party-game-phase",syncGameplayVideo);
   document.addEventListener("timeline-party-language-change",renderVideoRoom);window.addEventListener("beforeunload",()=>leaveVideo(false));new MutationObserver(()=>requestAnimationFrame(decorate)).observe(document.querySelector("#app")||document.documentElement,{childList:true,subtree:true});setInterval(decorate,1500);decorate();
 })();
