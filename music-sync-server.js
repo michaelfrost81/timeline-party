@@ -83,6 +83,11 @@ function maybeCleanupRoom(room) {
 }
 
 io.on("connection", (socket) => {
+  socket.on("music:ping", (payload = {}, done) => {
+    if (typeof done !== "function") return;
+    done({ ok: true, echo: payload?.sentAt || null, serverTime: Date.now() });
+  });
+
   socket.on("music:join", ({ room, playerId, name, provider, ready, isHost } = {}, done) => {
     const nextRoom = normalizeRoom(room);
     if (!nextRoom || !playerId) return done?.({ ok: false });
