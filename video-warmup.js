@@ -4,10 +4,19 @@
   const SIGNAL_URL = "https://timeline-party-video-signal.onrender.com";
   let bypassNextJoin = false;
   let warming = false;
+  let suppressTransientUntil = 0;
 
   const en = () => localStorage.getItem("timeline-party-language") === "en-US";
   const t = (da, us) => en() ? us : da;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  const originalAlert = window.alert.bind(window);
+  window.alert = message => {
+    const text = String(message || "").trim();
+    const transient = text.toLowerCase() === "timeout" || text === "Videoforbindelsen svarede ikke." || text === "The video connection did not respond.";
+    if (transient && Date.now() < suppressTransientUntil) return;
+    originalAlert(message);
+  };
 
   function setButtonState(button, busy) {
     if (!button) return;
@@ -25,19 +34,22 @@
   async function warmServer(button) {
     if (warming) return false;
     warming = true;
+    suppressTransientUntil = Date.now() + 90000;
     setButtonState(button, true);
     const started = Date.now();
     let ok = false;
 
     while (Date.now() - started < 70000) {
       try {
-        await fetch(`${SIGNAL_URL}/?wake=${Date.now()}`, {
-          mode: "no-cors",
+        const response = await fetch(`${SIGNAL_URL}/?wake=${Date.now()}`, {
+          mode: "cors",
           cache: "no-store",
           credentials: "omit"
         });
-        ok = true;
-        break;
+        if (response.ok) {
+          ok = true;
+          break;
+        }
       } catch {}
       await sleep(2500);
     }
@@ -61,14 +73,15 @@
 
     const ready = await warmServer(button);
     if (!ready) {
-      alert(t(
+      suppressTransientUntil = 0;
+      originalAlert(t(
         "Videoserveren kunne ikke vækkes. Prøv igen om et øjeblik.",
         "The video server could not be reached. Please try again in a moment."
       ));
       return;
     }
 
-    await sleep(800);
+    await sleep(1200);
     bypassNextJoin = true;
     button.click();
   }, true);
