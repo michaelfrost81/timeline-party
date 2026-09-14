@@ -12,6 +12,10 @@
   const providerApi = () => globalThis.TimelinePartyMusicProviders;
   const isSelected = () => providerApi()?.selectedId?.() === "apple";
 
+  function reportHealth(state, driftMs = null) {
+    document.dispatchEvent(new CustomEvent("timeline-party-music-provider-health", { detail: { provider: "apple", state, driftMs } }));
+  }
+
   function setProviderState() {
     const provider = providerApi()?.providers?.apple;
     if (!provider) return;
@@ -71,6 +75,7 @@
       console.warn("Apple Music init failed", error);
       configured = false;
       setProviderState();
+      reportHealth("error");
       return null;
     }).finally(() => { initPromise = null; });
     return initPromise;
@@ -82,6 +87,7 @@
     await instance.authorize();
     authorized = Boolean(instance.isAuthorized);
     setProviderState();
+    reportHealth(authorized ? "idle" : "warning");
     return authorized;
   }
 
@@ -110,42 +116,64 @@
     else { try { music.player.currentPlaybackTime = seconds; } catch {} }
   }
 
+  function currentPositionMs() {
+    const seconds = Number(music?.player?.currentPlaybackTime);
+    return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds * 1000)) : null;
+  }
+
   function positionFor(command = {}) {
     const base = Number(command.positionMs);
     if (Number.isFinite(base)) return Math.max(0, base + Math.max(0, Date.now() - Number(command.receivedAt || Date.now())));
     return Math.max(0, Date.now() - Number(command.startedAt || Date.now()));
   }
 
+  async function confirmSync(targetPositionMs) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const actual = currentPositionMs();
+    if (!Number.isFinite(actual)) {
+      reportHealth("synced");
+      return;
+    }
+    const drift = actual - targetPositionMs;
+    reportHealth(Math.abs(drift) > 1200 ? "warning" : "synced", drift);
+  }
+
   async function playCommand(command = {}) {
     if (!isSelected()) return;
     const instance = await init();
-    if (!instance || !configured || !instance.isAuthorized) return;
+    if (!instance || !configured || !instance.isAuthorized) { reportHealth("warning"); return; }
     authorized = true;
+    reportHealth("syncing");
     const songId = await resolveAppleSong(command.track || {});
     if (!songId) throw new Error("Kunne ikke matche rundens sang i Apple Music.");
     const positionMs = positionFor(command);
     await instance.setQueue({ song: songId });
     await instance.play();
     if (positionMs > 250) await seekTo(positionMs);
+    await confirmSync(positionMs);
   }
 
   async function stateCommand(command = {}) {
     if (!isSelected() || !music?.isAuthorized) return;
+    reportHealth("syncing");
     const positionMs = command.playing ? positionFor(command) : Math.max(0, Number(command.positionMs) || 0);
     if (command.playing) {
       const songId = await resolveAppleSong(command.track || {});
       if (songId) await music.setQueue({ song: songId });
       await music.play();
       await seekTo(positionMs);
+      await confirmSync(positionMs);
     } else {
       await seekTo(positionMs);
       music.pause();
+      reportHealth("synced", 0);
     }
   }
 
   function stopCommand() {
     if (!isSelected() || !music) return;
     try { music.pause(); } catch {}
+    reportHealth("idle", 0);
   }
 
   function renderConnectButton() {
@@ -173,12 +201,14 @@
       await connect();
       renderConnectButton();
       document.dispatchEvent(new CustomEvent("timeline-party-music-provider-change", { detail: { provider: "apple" } }));
-    } catch (error) { alert(error.message || "Kunne ikke forbinde Apple Music."); }
-    finally { button.disabled = false; }
+    } catch (error) {
+      reportHealth("error");
+      alert(error.message || "Kunne ikke forbinde Apple Music.");
+    } finally { button.disabled = false; }
   });
 
-  document.addEventListener("timeline-party-music-play", (event) => playCommand(event.detail).catch((error) => console.warn("Apple Music play failed", error)));
-  document.addEventListener("timeline-party-music-state", (event) => stateCommand(event.detail).catch((error) => console.warn("Apple Music sync failed", error)));
+  document.addEventListener("timeline-party-music-play", (event) => playCommand(event.detail).catch((error) => { reportHealth("error"); console.warn("Apple Music play failed", error); }));
+  document.addEventListener("timeline-party-music-state", (event) => stateCommand(event.detail).catch((error) => { reportHealth("error"); console.warn("Apple Music sync failed", error); }));
   document.addEventListener("timeline-party-music-stop", stopCommand);
   document.addEventListener("timeline-party-music-provider-change", () => setTimeout(renderConnectButton, 0));
   new MutationObserver(renderConnectButton).observe(document.documentElement, { childList: true, subtree: true });
