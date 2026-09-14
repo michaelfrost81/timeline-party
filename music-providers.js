@@ -19,9 +19,9 @@
       label: "Apple Music",
       icon: "🍎",
       available: false,
-      mode: "planned",
-      connected: () => false,
-      description: "Apple Music · klargjort som næste musiktjeneste"
+      mode: "embedded",
+      connected: () => Boolean(globalThis.TimelinePartyAppleMusic?.connected?.()),
+      description: "Apple Music · MusicKit-integration er klargjort og aktiveres, når udviklertoken er konfigureret"
     },
     telmore: {
       id: "telmore",
