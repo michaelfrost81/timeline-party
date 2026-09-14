@@ -28,22 +28,42 @@ function cleanTrack(track = {}, fallback = {}) {
   if (sourceProviders.telmore) providers.telmore = { id: String(sourceProviders.telmore.id || "").slice(0, 160) };
   return { isrc: String(track.isrc || "").slice(0, 40), durationMs: Math.max(0, Number(track.durationMs || fallback.durationMs) || 0), providers };
 }
-function roomParticipants(room) {
-  const sockets = io.sockets.adapter.rooms.get(room) || new Set();
-  return [...sockets].map((socketId) => {
+
+function roomPlayerSockets(room) {
+  const socketIds = io.sockets.adapter.rooms.get(room) || new Set();
+  const groups = new Map();
+  for (const socketId of socketIds) {
     const peer = io.sockets.sockets.get(socketId);
-    return peer && peer.data.playerId ? {
-      playerId: peer.data.playerId,
-      name: peer.data.name || "Spiller",
-      provider: peer.data.provider || "spotify",
-      ready: Boolean(peer.data.ready),
-      host: roomHosts.get(room) === peer.data.playerId
-    } : null;
-  }).filter(Boolean);
+    if (!peer?.data?.playerId) continue;
+    const id = peer.data.playerId;
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(peer);
+  }
+  return groups;
+}
+function roomParticipants(room) {
+  const groups = roomPlayerSockets(room);
+  return [...groups.entries()].map(([playerId, peers]) => {
+    const primary = peers.find((peer) => !peer.data.diagnosticsOnly) || peers[0];
+    const healthPeer = peers.find((peer) => peer.data.health) || primary;
+    const health = healthPeer?.data?.health || {};
+    return {
+      playerId,
+      name: primary?.data?.name || "Spiller",
+      provider: primary?.data?.provider || "spotify",
+      ready: Boolean(primary?.data?.ready),
+      host: roomHosts.get(room) === playerId,
+      latencyMs: Number.isFinite(health.latencyMs) ? health.latencyMs : null,
+      connection: health.connection || "unknown",
+      syncState: health.syncState || "unknown",
+      driftMs: Number.isFinite(health.driftMs) ? health.driftMs : null,
+      lastHealthAt: Number(health.at) || 0
+    };
+  });
 }
 function emitPresence(room) { io.to(room).emit("music:presence", { participants: roomParticipants(room), at: Date.now() }); }
 function isRoomHost(socket) {
-  return Boolean(socket.data.room && socket.data.playerId && roomHosts.get(socket.data.room) === socket.data.playerId);
+  return Boolean(socket.data.room && socket.data.playerId && roomHosts.get(socket.data.room) === socket.data.playerId && !socket.data.diagnosticsOnly);
 }
 function claimHost(room, playerId, requested) {
   if (!requested) return false;
@@ -88,7 +108,7 @@ io.on("connection", (socket) => {
     done({ ok: true, echo: payload?.sentAt || null, serverTime: Date.now() });
   });
 
-  socket.on("music:join", ({ room, playerId, name, provider, ready, isHost } = {}, done) => {
+  socket.on("music:join", ({ room, playerId, name, provider, ready, isHost, diagnosticsOnly } = {}, done) => {
     const nextRoom = normalizeRoom(room);
     if (!nextRoom || !playerId) return done?.({ ok: false });
     const previousRoom = socket.data.room;
@@ -101,16 +121,30 @@ io.on("connection", (socket) => {
     socket.data.name = String(name || "Spiller").slice(0, 80);
     socket.data.provider = cleanProvider(provider);
     socket.data.ready = Boolean(ready);
+    socket.data.diagnosticsOnly = Boolean(diagnosticsOnly);
     socket.join(nextRoom);
-    const host = claimHost(nextRoom, socket.data.playerId, Boolean(isHost));
+    const host = socket.data.diagnosticsOnly ? roomHosts.get(nextRoom) === socket.data.playerId : claimHost(nextRoom, socket.data.playerId, Boolean(isHost));
     done?.({ ok: true, host, participants: roomParticipants(nextRoom), playback: playbackSnapshot(nextRoom), serverTime: Date.now() });
     emitPresence(nextRoom);
   });
 
   socket.on("music:ready", ({ provider, ready } = {}, done) => {
-    if (!socket.data.room || !socket.data.playerId) return done?.({ ok: false });
+    if (!socket.data.room || !socket.data.playerId || socket.data.diagnosticsOnly) return done?.({ ok: false });
     socket.data.provider = cleanProvider(provider || socket.data.provider);
     socket.data.ready = Boolean(ready);
+    done?.({ ok: true });
+    emitPresence(socket.data.room);
+  });
+
+  socket.on("music:health", ({ latencyMs, connection, syncState, driftMs } = {}, done) => {
+    if (!socket.data.room || !socket.data.playerId) return done?.({ ok: false });
+    socket.data.health = {
+      latencyMs: Number.isFinite(Number(latencyMs)) ? Math.max(0, Math.min(10000, Math.round(Number(latencyMs)))) : null,
+      connection: ["online", "offline", "reconnecting"].includes(connection) ? connection : "unknown",
+      syncState: ["idle", "syncing", "synced", "warning", "error", "unknown"].includes(syncState) ? syncState : "unknown",
+      driftMs: Number.isFinite(Number(driftMs)) ? Math.max(-30000, Math.min(30000, Math.round(Number(driftMs)))) : null,
+      at: Date.now()
+    };
     done?.({ ok: true });
     emitPresence(socket.data.room);
   });
