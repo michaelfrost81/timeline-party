@@ -79,7 +79,7 @@
     }
 
     const warmup = document.createElement("script");
-    warmup.src = "/video-warmup.js?v=1";
+    warmup.src = "/video-warmup.js?v=2";
     warmup.dataset.videoTestBootstrap = "warmup";
     warmup.onload = () => {
       const video = document.createElement("script");
