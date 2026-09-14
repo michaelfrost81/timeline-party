@@ -28,6 +28,19 @@ io.on("connection", socket => {
   socket.on("video:join", ({ room, playerId, name }, done) => {
     room = cleanRoom(room); playerId = cleanId(playerId); name = cleanName(name);
     if (!room || !playerId) return typeof done === "function" && done({ ok:false });
+
+    // A browser can briefly create a second signaling socket while a sleeping
+    // Render service wakes up. Keep only the newest socket for each player.
+    for (const other of io.sockets.sockets.values()) {
+      if (other.id === socket.id) continue;
+      if (other.data.room === room && other.data.playerId === playerId) {
+        other.to(room).emit("video:peer-left", { socketId:other.id, playerId });
+        other.leave(room);
+        delete other.data.room;
+        other.disconnect(true);
+      }
+    }
+
     socket.data.room = room;
     socket.data.playerId = playerId;
     socket.data.name = name;
