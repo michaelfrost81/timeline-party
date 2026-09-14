@@ -74,7 +74,7 @@
     if (!document.querySelector('link[href^="video-chat.css"],link[href^="/video-chat.css"]')) {
       const style = document.createElement("link");
       style.rel = "stylesheet";
-      style.href = "/video-chat.css?v=3";
+      style.href = "/video-chat.css?v=4";
       document.head.appendChild(style);
     }
 
