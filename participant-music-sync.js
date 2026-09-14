@@ -14,6 +14,7 @@
   let pendingCommand = null;
   let lastRemoteUri = "";
   let musicParticipants = [];
+  let lastPlaybackReplayKey = "";
 
   const providers = () => globalThis.TimelinePartyMusicProviders;
   const selectedProvider = () => providers()?.current?.() || { id: "spotify", label: "Spotify", available: true };
@@ -144,6 +145,19 @@
     if (musicSocket.connected && joinedRoom !== code) joinSignalRoom();
   }
 
+  function replayCurrentPlayback(playback) {
+    if (!playback || isHostUi() || playback.senderId === playerId()) return;
+    const key = `${room()}|${playback.senderId || ""}|${playback.playing ? "1" : "0"}|${Math.floor(Number(playback.startedAt || playback.changedAt || 0) / 1000)}|${playback.track?.isrc || spotifyUriFrom(playback)}`;
+    if (key === lastPlaybackReplayKey) return;
+    lastPlaybackReplayKey = key;
+    if (playback.playing) {
+      setStatus("🔄 Genoptager den aktuelle sang efter genforbindelse…");
+      playRemote(playback);
+    } else {
+      handleRemoteState(playback);
+    }
+  }
+
   function joinSignalRoom() {
     const code = room(); if (!musicSocket?.connected || !code) return;
     musicSocket.emit("music:join", {
@@ -158,6 +172,7 @@
         joinedRoom = code;
         musicParticipants = Array.isArray(result.participants) ? result.participants : musicParticipants;
         renderMusicStatus();
+        if (result.playback) setTimeout(() => replayCurrentPlayback(result.playback), 100);
       }
     });
   }
@@ -226,6 +241,7 @@
     if (command?.senderId === playerId()) return;
     dispatchMusicEvent("stop", command);
     clearPending();
+    lastPlaybackReplayKey = "";
     if (selectedProvider().id !== "spotify" || !tokenData()) { setStatus("Klar til næste runde."); return; }
     try { const deviceId = await findTimelinePartyDevice(3000); await spotifyApi(`/me/player/pause?device_id=${encodeURIComponent(deviceId)}`, { method: "PUT" }); setStatus("Musikken er stoppet. Klar til næste runde."); }
     catch { setStatus("Klar til næste runde."); }
@@ -278,6 +294,7 @@
       providers()?.select?.(id);
       const current = selectedProvider();
       status = current.available ? "" : `${current.label} er valgt, men afspilning er ikke aktiveret endnu.`;
+      lastPlaybackReplayKey = "";
       renderMusicStatus();
       if (musicSocket?.connected) joinSignalRoom();
       setTimeout(reportReadiness, 50);
