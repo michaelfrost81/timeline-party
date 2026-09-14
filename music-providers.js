@@ -21,6 +21,14 @@
       connected: () => false,
       description: "Apple Music · klargjort som næste musiktjeneste"
     },
+    telmore: {
+      id: "telmore",
+      label: "Telmore Musik",
+      icon: "🎵",
+      available: false,
+      connected: () => false,
+      description: "Telmore Musik · med på listen, mens vi undersøger sikker integration og synkroniseret afspilning"
+    },
     youtube: {
       id: "youtube",
       label: "YouTube",
