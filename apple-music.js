@@ -17,9 +17,7 @@
     if (!provider) return;
     provider.available = Boolean(configured);
     provider.connected = () => Boolean(configured && authorized);
-    provider.description = configured
-      ? "Apple Music · direkte afspilning i Timeline Party"
-      : "Apple Music · kræver MusicKit-opsætning for Timeline Party";
+    provider.description = configured ? "Apple Music · direkte afspilning i Timeline Party" : "Apple Music · kræver MusicKit-opsætning for Timeline Party";
     document.dispatchEvent(new CustomEvent("timeline-party-music-provider-change", { detail: { provider: "apple" } }));
   }
 
@@ -51,9 +49,7 @@
       const type = response.headers.get("content-type") || "";
       if (type.includes("application/json")) return String((await response.json())?.token || "").trim();
       return String(await response.text()).trim();
-    } catch {
-      return "";
-    }
+    } catch { return ""; }
   }
 
   async function init() {
@@ -61,11 +57,7 @@
     if (initPromise) return initPromise;
     initPromise = (async () => {
       developerToken = await getDeveloperToken();
-      if (!developerToken) {
-        configured = false;
-        setProviderState();
-        return null;
-      }
+      if (!developerToken) { configured = false; setProviderState(); return null; }
       await loadScript();
       const MusicKit = globalThis.MusicKit;
       if (!MusicKit) throw new Error("Apple Music kunne ikke initialiseres.");
@@ -114,23 +106,24 @@
   async function seekTo(positionMs) {
     const seconds = Math.max(0, Number(positionMs) || 0) / 1000;
     if (!music?.player) return;
-    if (typeof music.player.seekToTime === "function") {
-      await music.player.seekToTime(seconds);
-    } else {
-      try { music.player.currentPlaybackTime = seconds; } catch {}
-    }
+    if (typeof music.player.seekToTime === "function") await music.player.seekToTime(seconds);
+    else { try { music.player.currentPlaybackTime = seconds; } catch {} }
+  }
+
+  function positionFor(command = {}) {
+    const base = Number(command.positionMs);
+    if (Number.isFinite(base)) return Math.max(0, base + Math.max(0, Date.now() - Number(command.receivedAt || Date.now())));
+    return Math.max(0, Date.now() - Number(command.startedAt || Date.now()));
   }
 
   async function playCommand(command = {}) {
     if (!isSelected()) return;
     const instance = await init();
-    if (!instance || !configured) return;
-    if (!instance.isAuthorized) return;
+    if (!instance || !configured || !instance.isAuthorized) return;
     authorized = true;
     const songId = await resolveAppleSong(command.track || {});
     if (!songId) throw new Error("Kunne ikke matche rundens sang i Apple Music.");
-    const startedAt = Number(command.startedAt) || Date.now();
-    const positionMs = Math.max(0, Date.now() - startedAt);
+    const positionMs = positionFor(command);
     await instance.setQueue({ song: songId });
     await instance.play();
     if (positionMs > 250) await seekTo(positionMs);
@@ -138,8 +131,7 @@
 
   async function stateCommand(command = {}) {
     if (!isSelected() || !music?.isAuthorized) return;
-    const elapsed = command.playing ? Math.max(0, Date.now() - Number(command.changedAt || Date.now())) : 0;
-    const positionMs = Math.max(0, Number(command.positionMs) || 0) + elapsed;
+    const positionMs = command.playing ? positionFor(command) : Math.max(0, Number(command.positionMs) || 0);
     if (command.playing) {
       const songId = await resolveAppleSong(command.track || {});
       if (songId) await music.setQueue({ song: songId });
@@ -181,11 +173,8 @@
       await connect();
       renderConnectButton();
       document.dispatchEvent(new CustomEvent("timeline-party-music-provider-change", { detail: { provider: "apple" } }));
-    } catch (error) {
-      alert(error.message || "Kunne ikke forbinde Apple Music.");
-    } finally {
-      button.disabled = false;
-    }
+    } catch (error) { alert(error.message || "Kunne ikke forbinde Apple Music."); }
+    finally { button.disabled = false; }
   });
 
   document.addEventListener("timeline-party-music-play", (event) => playCommand(event.detail).catch((error) => console.warn("Apple Music play failed", error)));
