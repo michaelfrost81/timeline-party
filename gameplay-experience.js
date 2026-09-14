@@ -22,13 +22,8 @@
     Object.assign(globalThis.io, originalIo);
   }
 
-  function currentPlayer() {
-    return game?.players?.find((player) => player.id === myId());
-  }
-
-  function activePlayer() {
-    return game?.players?.find((player) => player.id === game?.roundPlayerId);
-  }
+  function currentPlayer() { return game?.players?.find((player) => player.id === myId()); }
+  function activePlayer() { return game?.players?.find((player) => player.id === game?.roundPlayerId); }
 
   function getPhase() {
     if (!game?.currentSong) return null;
@@ -67,10 +62,7 @@
     toast.textContent = message;
     document.body.appendChild(toast);
     requestAnimationFrame(() => toast.classList.add("show"));
-    setTimeout(() => {
-      toast.classList.remove("show");
-      setTimeout(() => toast.remove(), 250);
-    }, 1400);
+    setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.remove(), 250); }, 1400);
   }
 
   function detectNewTimelineSong() {
@@ -98,10 +90,7 @@
     overlay.innerHTML = `<div class="gx-reveal-card"><p class="eyebrow">${text("SVARET ER", "THE ANSWER IS")}</p><div class="gx-reveal-year">${song.year || "?"}</div><h2>${song.title || ""}</h2><p>${song.artist || ""}</p><button type="button" data-gx-dismiss>${text("Fortsæt", "Continue")}</button></div>`;
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add("show"));
-    const dismiss = () => {
-      overlay.classList.remove("show");
-      setTimeout(() => overlay.remove(), 250);
-    };
+    const dismiss = () => { overlay.classList.remove("show"); setTimeout(() => overlay.remove(), 250); };
     overlay.querySelector("[data-gx-dismiss]")?.addEventListener("click", dismiss);
     setTimeout(dismiss, 3200);
   }
@@ -110,22 +99,39 @@
     document.querySelectorAll(".timeline, .timeline-list, [data-timeline]").forEach((item) => item.classList.add("gx-timeline-scroll"));
   }
 
+  function challengePlayerIds() {
+    const ids = new Set();
+    const add = (value) => {
+      if (!value) return;
+      if (typeof value === "string") ids.add(value);
+      else if (value.playerId) ids.add(value.playerId);
+      else if (value.id) ids.add(value.id);
+    };
+    [game?.challengers, game?.challengePlayers, game?.challengeQueue, game?.challenges].forEach((list) => {
+      if (Array.isArray(list)) list.forEach(add);
+    });
+    game?.players?.forEach((player) => {
+      if (player.challenging || player.challengeActive || player.hasChallenged || player.challengePending) ids.add(player.id);
+    });
+    return [...ids];
+  }
+
   function announceGameplayPhase() {
+    const active = activePlayer();
     document.dispatchEvent(new CustomEvent("timeline-party-game-phase", {
       detail: {
         active: Boolean(game?.currentSong && !game?.finished),
         phase: getPhase(),
-        roundNumber: game?.roundNumber || 0
+        roundNumber: game?.roundNumber || 0,
+        activePlayerId: active?.id || game?.roundPlayerId || "",
+        activePlayerName: active?.name || "",
+        challengerIds: challengePlayerIds()
       }
     }));
   }
 
   function updateExperience() {
-    updateTurnCard();
-    improveLongTimelines();
-    detectNewTimelineSong();
-    showReveal();
-    announceGameplayPhase();
+    updateTurnCard(); improveLongTimelines(); detectNewTimelineSong(); showReveal(); announceGameplayPhase();
   }
 
   document.addEventListener("click", (event) => {
@@ -143,12 +149,6 @@
 
 (() => {
   if (document.querySelector('script[data-timeline-video]')) return;
-  const css = document.createElement('link');
-  css.rel = 'stylesheet';
-  css.href = '/video-chat.css?v=2';
-  document.head.appendChild(css);
-  const script = document.createElement('script');
-  script.src = '/video-chat.js?v=3';
-  script.dataset.timelineVideo = '1';
-  document.head.appendChild(script);
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/video-chat.css?v=4'; document.head.appendChild(css);
+  const script = document.createElement('script'); script.src = '/video-chat.js?v=4'; script.dataset.timelineVideo = '1'; document.head.appendChild(script);
 })();
