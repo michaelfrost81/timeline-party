@@ -11,6 +11,8 @@
   let timer = null;
   let participants = [];
   let joinedRoom = "";
+  let providerSyncState = "idle";
+  let providerDriftMs = null;
 
   const room = () => String(localStorage.getItem(GAME_CODE_KEY) || "").trim().toUpperCase();
   const playerId = () => localStorage.getItem(PLAYER_ID_KEY) || "";
@@ -45,6 +47,14 @@
     return bits.join(" · ");
   }
 
+  function setHtml(node, html) {
+    if (node.innerHTML !== html) node.innerHTML = html;
+  }
+
+  function setText(node, text) {
+    if (node.textContent !== text) node.textContent = text;
+  }
+
   function renderHostDetails(host) {
     let details = host.querySelector("[data-music-health-list]");
     if (!isHostUi()) {
@@ -59,7 +69,7 @@
     }
     const others = participants.filter((item) => item.playerId !== playerId());
     if (!others.length) {
-      details.innerHTML = '<p class="hint"><strong>Forbindelsestjek</strong> · venter på deltagere…</p>';
+      setHtml(details, '<p class="hint"><strong>Forbindelsestjek</strong> · venter på deltagere…</p>');
       return;
     }
     const rows = others.map((item) => {
@@ -67,7 +77,7 @@
       const extra = healthText(item);
       return `<div class="music-health-player">${healthIcon(item)} <strong>${escapeHtml(item.name || "Spiller")}</strong> · ${escapeHtml(providerLabel)}${extra ? ` · ${escapeHtml(extra)}` : ""}</div>`;
     }).join("");
-    details.innerHTML = `<p class="hint"><strong>Forbindelsestjek</strong></p>${rows}`;
+    setHtml(details, `<p class="hint"><strong>Forbindelsestjek</strong></p>${rows}`);
   }
 
   function escapeHtml(value) {
@@ -84,15 +94,12 @@
       row.dataset.musicDiagnostics = "1";
       host.appendChild(row);
     }
-    if (state === "online" && Number.isFinite(latency)) {
-      row.textContent = `Musiksync: online · ${latency} ms · ${quality(latency)}`;
-    } else if (state === "online") {
-      row.textContent = "Musiksync: online";
-    } else if (state === "offline") {
-      row.textContent = "Musiksync: forbindelsen er afbrudt og prøver igen…";
-    } else {
-      row.textContent = "Musiksync: forbinder…";
-    }
+    let text;
+    if (state === "online" && Number.isFinite(latency)) text = `Musiksync: online · ${latency} ms · ${quality(latency)}`;
+    else if (state === "online") text = "Musiksync: online";
+    else if (state === "offline") text = "Musiksync: forbindelsen er afbrudt og prøver igen…";
+    else text = "Musiksync: forbinder…";
+    setText(row, text);
     renderHostDetails(host);
   }
 
@@ -112,10 +119,11 @@
       joinedRoom = code;
       participants = Array.isArray(result.participants) ? result.participants : participants;
       render();
+      reportHealth();
     });
   }
 
-  function reportHealth(syncState = "idle", driftMs = null) {
+  function reportHealth(syncState = providerSyncState, driftMs = providerDriftMs) {
     if (!socket?.connected || !joinedRoom) return;
     socket.emit("music:health", {
       latencyMs: latency,
@@ -132,12 +140,12 @@
       if (error || !result?.ok) {
         latency = null;
         render();
-        reportHealth("warning");
+        reportHealth();
         return;
       }
       latency = Math.max(0, Math.round(performance.now() - sentAt));
       render();
-      reportHealth(latency >= 400 ? "warning" : "idle");
+      reportHealth();
     });
   }
 
@@ -181,17 +189,36 @@
   }
 
   document.addEventListener("timeline-party-music-provider-change", () => {
+    providerSyncState = "idle";
+    providerDriftMs = null;
     if (socket?.connected) joinRoom();
   });
-  document.addEventListener("timeline-party-music-play", () => reportHealth("syncing"));
-  document.addEventListener("timeline-party-music-state", () => reportHealth("syncing"));
-  document.addEventListener("timeline-party-music-stop", () => reportHealth("idle"));
+  document.addEventListener("timeline-party-music-play", () => {
+    providerSyncState = "syncing";
+    providerDriftMs = null;
+    reportHealth();
+  });
+  document.addEventListener("timeline-party-music-state", () => {
+    providerSyncState = "syncing";
+    providerDriftMs = null;
+    reportHealth();
+  });
+  document.addEventListener("timeline-party-music-stop", () => {
+    providerSyncState = "idle";
+    providerDriftMs = null;
+    reportHealth();
+  });
   document.addEventListener("timeline-party-music-provider-health", (event) => {
     const detail = event.detail || {};
-    reportHealth(detail.state || "unknown", Number.isFinite(detail.driftMs) ? detail.driftMs : null);
+    providerSyncState = detail.state || "unknown";
+    providerDriftMs = Number.isFinite(detail.driftMs) ? detail.driftMs : null;
+    reportHealth();
   });
 
-  new MutationObserver(() => { render(); if (socket?.connected && !joinedRoom) joinRoom(); }).observe(document.documentElement, { childList: true, subtree: true });
+  new MutationObserver(() => {
+    render();
+    if (socket?.connected && !joinedRoom) joinRoom();
+  }).observe(document.documentElement, { childList: true, subtree: true });
   ensure();
   render();
 })();
