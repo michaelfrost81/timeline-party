@@ -10,6 +10,7 @@
       label: "Spotify",
       icon: "🎧",
       available: true,
+      mode: "embedded",
       connected: () => Boolean(spotifyToken()),
       description: "Spotify Premium · direkte afspilning i Timeline Party"
     },
@@ -18,6 +19,7 @@
       label: "Apple Music",
       icon: "🍎",
       available: false,
+      mode: "planned",
       connected: () => false,
       description: "Apple Music · klargjort som næste musiktjeneste"
     },
@@ -25,15 +27,19 @@
       id: "telmore",
       label: "Telmore Musik",
       icon: "🎵",
-      available: false,
+      available: true,
+      beta: true,
+      mode: "external",
+      externalUrl: "https://musik.telmore.dk",
       connected: () => false,
-      description: "Telmore Musik · med på listen, mens vi undersøger sikker integration og synkroniseret afspilning"
+      description: "Telmore Musik · beta via Telmores webafspiller. Automatisk styring kræver en officiel afspilningsintegration fra Telmore."
     },
     youtube: {
       id: "youtube",
       label: "YouTube",
       icon: "▶️",
       available: false,
+      mode: "planned",
       connected: () => false,
       description: "YouTube · kan tilføjes som alternativ senere"
     }
@@ -53,6 +59,12 @@
 
   function current() { return providers[selectedId()]; }
   function all() { return Object.values(providers); }
+  function openExternal(id = selectedId()) {
+    const provider = providers[id];
+    if (!provider?.externalUrl) return false;
+    window.open(provider.externalUrl, "_blank", "noopener,noreferrer");
+    return true;
+  }
 
-  globalThis.TimelinePartyMusicProviders = { all, current, select, selectedId, providers };
+  globalThis.TimelinePartyMusicProviders = { all, current, select, selectedId, openExternal, providers };
 })();
