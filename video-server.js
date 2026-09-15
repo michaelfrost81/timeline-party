@@ -2,6 +2,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 const PORT = process.env.PORT || 10000;
+const MAX_ROOM_PARTICIPANTS = 10;
 const server = http.createServer((req, res) => {
   res.writeHead(200, {
     "content-type": "text/plain; charset=utf-8",
@@ -45,6 +46,11 @@ io.on("connection", socket => {
       }
     }
 
+    const currentMembers = io.sockets.adapter.rooms.get(room)?.size || 0;
+    if (currentMembers >= MAX_ROOM_PARTICIPANTS) {
+      return typeof done === "function" && done({ ok:false, reason:"room-full", maxParticipants:MAX_ROOM_PARTICIPANTS });
+    }
+
     socket.data.room = room;
     socket.data.playerId = playerId;
     socket.data.name = name;
@@ -56,7 +62,7 @@ io.on("connection", socket => {
         return peer ? { socketId:id, playerId:peer.data.playerId || "", name:peer.data.name || "Player" } : null;
       }).filter(Boolean);
     socket.to(room).emit("video:peer-joined", { socketId:socket.id, playerId, name });
-    if (typeof done === "function") done({ ok:true, socketId:socket.id, peers });
+    if (typeof done === "function") done({ ok:true, socketId:socket.id, peers, maxParticipants:MAX_ROOM_PARTICIPANTS });
   });
 
   socket.on("video:signal", ({ target, data }) => {
